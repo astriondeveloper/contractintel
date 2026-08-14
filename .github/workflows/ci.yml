@@ -113,6 +113,39 @@ jobs:
           fi
           grep -E '^[0-9]+ pass' acceptance.log || true
 
+      # The interface is server-rendered with no build step, so nothing but running it
+      # proves it still runs. Every screen is checked against the seeded-but-not-loaded
+      # database CI has, which is also the state a fresh clone is in: each one must
+      # render and explain its own emptiness rather than 500.
+      - name: The interface serves every screen
+        run: |
+          npm run web & echo $! > web.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/healthz > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          status=0
+          for route in / /entities /contracts /subcontracts /customers /programs \
+                       /dacis-contracts /taxonomy /watchlist /review /quality /acceptance \
+                       /healthz /api/overview /api/acceptance /api/quality \
+                       /app.css /fonts/Archivo-Regular.woff2; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$route")
+            if [ "$code" != "200" ]; then
+              echo "::error::$route returned $code"
+              status=1
+            else
+              echo "  $code  $route"
+            fi
+          done
+          # Read only is a property of the router, not just an absence of forms.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/)
+          if [ "$code" != "405" ]; then
+            echo "::error::POST / returned $code, expected 405. The interface must be read only."
+            status=1
+          fi
+          kill "$(cat web.pid)" 2>/dev/null || true
+          exit $status
+
       - name: Upload acceptance output
         if: always()
         uses: actions/upload-artifact@v4

@@ -14,7 +14,13 @@ npm run migrate                  # 18 forward-only SQL migrations
 npm run seed                     # the authored seed files, if you have them locally
 npm test                         # 164 tests, on the synthetic seeds in tests/seed/
 npm run accept                   # the twelve acceptance tests from spec section 18
+npm run web                      # the interface, http://localhost:3000
 ```
+
+`docker compose up` on its own does all of that except the tests: database, migrations,
+seeds, and the interface on port 3000.
+
+While working on a screen, `npm run web:dev` restarts on save.
 
 If you would rather not use Docker, any PostgreSQL 16 you can reach works. Set
 `DATABASE_URL` in `.env` and skip the `docker compose` line. The test harness derives
@@ -48,6 +54,42 @@ your filenames do not follow Deltek's convention, pass it:
 ```bash
 npm run load -- --role loss /path/to/whatever_they_called_it.csv
 ```
+
+## Working on the interface
+
+`src/web/` is a `node:http` server that renders strings. No framework, no client bundle, no
+build step, and no dependency that is not already in the lockfile.
+
+```
+src/web/server.ts       routing, static assets, graceful shutdown
+src/web/queries.ts      every statement the interface runs, in one place
+src/web/pages/          one file per screen
+src/web/components.ts   tile, table, pager, chip, empty state
+src/web/html.ts         escaping. Everything interpolated is escaped unless it came from `html`
+src/web/public/         app.css, the Archivo weights, the logo
+```
+
+Three rules, each load bearing:
+
+**It is read only, and the router enforces it.** Anything other than `GET` or `HEAD` gets a
+405. Working the review queue or confirming a seeded row writes to the corpus and needs the
+audit trail spec section 20 describes; a link on a list screen would bypass it.
+
+**Every screen must render against an empty database.** That is the state of a fresh clone,
+because no data is in this repository and none may be. A screen that assumes rows exist will
+fail for the next person who clones it, so each one names the command that would fill it.
+CI checks every route against a seeded-but-unloaded database.
+
+**Two acceptance tests read `src/web/public/app.css`.** Test 11 fails on any `font-size`
+below 12px or expressed in a relative unit, because a relative unit makes the smallest
+rendered size unknowable from the file. Test 12 fails if Archivo is not `@font-face`
+declared, not first in the body stack, or not on disk. Both run on every push. The four
+Archivo weights are committed under `src/web/public/fonts/` (SIL Open Font License) so the
+face renders identically in a container with no outbound network.
+
+Styling follows the Astrion 2026 Brand Evolution: dark first, Astrion Black behind
+Deep Space cards, Alabaster type, Astrion Sky for anything interactive, and the three-stop
+gradient only as the thin rule at the top edge.
 
 ## Before you open a pull request
 

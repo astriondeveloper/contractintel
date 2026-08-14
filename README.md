@@ -9,8 +9,8 @@ variables.
 
 ## State
 
-The data foundation is built and verified against the real corpus. The scoring engine and the
-interface are not built.
+The data foundation is built and verified against the real corpus, and there is a read-only
+interface over it. The scoring engine is not built.
 
 | | |
 |---|---|
@@ -18,8 +18,9 @@ interface are not built.
 | Loaders | FPDS transactions, FPDS subcontract edges, DACIS customers, programs, contracts |
 | Loaded | 22,624 contract actions, 4,042 subcontract edges, 854 customers, 74 programs, 213 DACIS contracts |
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
+| Interface | Twelve read-only screens, server rendered, no client bundle |
 | Tests | 164, against a real PostgreSQL 16 |
-| Acceptance tests | 3 of 12 pass, 0 fail, 9 blocked, each naming what it waits for |
+| Acceptance tests | 5 of 12 pass, 0 fail, 7 blocked, each naming what it waits for |
 
 `npm run accept` prints the current state of all twelve. **Blocked** means a test names its
 dependency; a **FAIL** is a real problem and CI treats it as one.
@@ -28,12 +29,45 @@ dependency; a **FAIL** is a real problem and CI treats it as one.
 
 ```bash
 cp .env.example .env
-docker compose up -d db
+docker compose up            # PostgreSQL 16, migrations, seeds, and the interface
+```
+
+Then open **http://localhost:3000**.
+
+Or without Docker, against any PostgreSQL 16 you can reach:
+
+```bash
 npm install && npm run migrate && npm run seed
+npm run web                  # http://localhost:3000
 npm test
 ```
 
-Full setup, including without Docker, is in **`CONTRIBUTING.md`**.
+The interface renders against an empty database on purpose: no data is in this repository, so
+a fresh clone has none, and every screen says what would fill it rather than showing a blank
+panel. Full setup is in **`CONTRIBUTING.md`**; deploying it is in **`docs/DEPLOY.md`**.
+
+## The interface
+
+Read only, and structurally so: the router answers `GET` and `HEAD` and returns 405 to
+anything else. Confirming a seeded row or merging two entities writes to the corpus and needs
+the audit trail spec section 20 describes, so those belong to a later phase rather than to a
+button that quietly bypasses it.
+
+| Screen | What it answers |
+|---|---|
+| Overview | What is loaded, how it resolved, when each source last landed |
+| Entities | One row per resolved company; the detail screen lists every spelling it answers to |
+| Contract actions | The FPDS corpus, with the vendor string as filed beside the entity it resolved to |
+| Subcontracts | Prime-to-sub edges, and which side Astrion is on |
+| Customers, Programs, DACIS contracts | The DACIS reference exports |
+| Taxonomy | The capability tree and its crosswalks |
+| Watchlist | Observed teaming direction against what the seed file stated |
+| Review queue | Everything the resolver refused to decide alone |
+| Data quality | The seven views that keep known source defects visible |
+| Acceptance | The twelve tests from spec section 18, run live |
+
+`/api/overview`, `/api/acceptance` and `/api/quality` return the same numbers as JSON, and
+`/healthz` answers a container probe without touching the corpus.
 
 ## Loading a corpus
 
@@ -62,6 +96,7 @@ anything it does not recognise. Every loader is idempotent.
 | `CIE_Phase1_Status.md` | What is built, what the corpus actually said, what is not done. **Not in this repository** — it records findings about real contracts, so it lives with the specification. |
 | `docs/DECISIONS.md` | Eleven decisions where this departs from the spec, each with the measurement that forced it. |
 | `docs/BACKLOG.md` | Remaining phases, in dependency order, sized, with the traps in each. |
+| `docs/DEPLOY.md` | Running the interface locally, and putting it on Azure Container Apps. |
 | `docs/GITHUB_SETUP.md` | One-time checklist for putting this on GitHub. |
 | `CONTRIBUTING.md` | Local setup and the things that will trip you up. |
 

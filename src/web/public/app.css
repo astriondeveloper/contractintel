@@ -1,0 +1,673 @@
+/*
+ * Contract Intelligence + Integration Engine — interface stylesheet.
+ *
+ * Astrion 2026 Brand Evolution: dark first, 90 percent dark and neutral, 10 percent
+ * high-impact accent. Archivo throughout, self-hosted from src/web/public/fonts so the
+ * face renders the same in a container with no outbound network as it does on a laptop.
+ *
+ * Two acceptance tests from specification section 18 are enforced against this file by
+ * scripts/acceptance.ts, so two rules here are load bearing rather than stylistic:
+ *
+ *   Test 11  No text is smaller than 12 pixels. Every font-size below is in px and no
+ *            value is under 12. Do not introduce a relative unit here: it makes the
+ *            smallest rendered size unknowable from the file and the check would have
+ *            to guess.
+ *   Test 12  The interface renders in Archivo, not a fallback face. Archivo is first in
+ *            every font stack and the four weights are @font-face declared below.
+ */
+
+/* ------------------------------------------------------------------ Archivo */
+/* SIL Open Font License. Four weights: the working hierarchy from the standards. */
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/Archivo-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/Archivo-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/Archivo-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Archivo';
+  src: url('/fonts/Archivo-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ------------------------------------------------------------------- palette */
+
+:root {
+  /* Dark core. Backgrounds and primary surfaces. */
+  --astrion-black: #101820;
+  --midnight: #222230;
+  --deep-space: #1e2436;
+
+  /* Neutrals. Light type on dark, dividers. */
+  --alabaster: #f1e9db;
+  --platinum: #dddddd;
+  --silver: #bdbdbd;
+
+  /* High-impact accents. The 10 percent. */
+  --twilight-te: #fc5442;
+  --supernova: #ffaf2e;
+  --astrion-sky: #29aae1;
+
+  /* Gradient stops. Thin accent elements only. */
+  --refraction: #1ed872;
+  --daylight: #4dd3f7;
+  --zenith: #9382f9;
+
+  --rule: #2b3446;
+  --rule-soft: #232b3a;
+  --shell: 1440px;
+}
+
+/* --------------------------------------------------------------------- base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--astrion-black);
+}
+
+body {
+  margin: 0;
+  background: var(--astrion-black);
+  color: var(--alabaster);
+  font-family: 'Archivo', Arial, sans-serif;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--astrion-sky);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3 {
+  font-family: 'Archivo', Arial, sans-serif;
+  color: var(--alabaster);
+  margin: 0;
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 19px;
+  font-weight: 600;
+}
+
+h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+code,
+.mono {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------- header */
+
+.masthead {
+  background: var(--astrion-black);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The three-stop gradient as a thin edge element, which is the only role the
+   standards give it. Never a surface, never behind body text. */
+.masthead::before {
+  content: '';
+  display: block;
+  height: 3px;
+  background: linear-gradient(90deg, var(--refraction) 0%, var(--daylight) 50%, var(--zenith) 100%);
+}
+
+.masthead-inner {
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 18px 24px 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand img {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+
+.brand-divider {
+  width: 1px;
+  height: 26px;
+  background: var(--rule);
+}
+
+.brand-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--alabaster);
+  letter-spacing: 0.01em;
+}
+
+.brand-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--silver);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.masthead-meta {
+  text-align: right;
+  font-size: 12px;
+  color: var(--silver);
+  padding-top: 4px;
+}
+
+.masthead-meta strong {
+  color: var(--platinum);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------- nav */
+
+.nav {
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.nav a {
+  display: block;
+  padding: 12px 12px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--silver);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.nav a:hover {
+  color: var(--alabaster);
+  text-decoration: none;
+}
+
+.nav a.current {
+  color: var(--alabaster);
+  border-bottom-color: var(--astrion-sky);
+}
+
+/* --------------------------------------------------------------------- page */
+
+main {
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+}
+
+.page-head {
+  margin-bottom: 22px;
+}
+
+.page-head p {
+  color: var(--silver);
+  font-size: 14px;
+  max-width: 78ch;
+  margin: 8px 0 0;
+}
+
+.section {
+  margin-top: 34px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.section-head .hint {
+  font-size: 12px;
+  color: var(--silver);
+}
+
+/* -------------------------------------------------------------------- tiles */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  background: var(--deep-space);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+
+.tile .label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--silver);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.tile .value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--alabaster);
+  margin-top: 6px;
+  line-height: 1.1;
+}
+
+.tile .value.absent {
+  color: var(--silver);
+  font-weight: 500;
+}
+
+.tile .foot {
+  font-size: 12px;
+  color: var(--silver);
+  margin-top: 4px;
+}
+
+.tile a {
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------- tables */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--deep-space);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+thead th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--silver);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--midnight);
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: top;
+  color: var(--platinum);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover td {
+  background: rgba(41, 170, 225, 0.06);
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+td.absent {
+  color: var(--silver);
+}
+
+td .sub {
+  display: block;
+  font-size: 12px;
+  color: var(--silver);
+  margin-top: 2px;
+}
+
+.empty {
+  padding: 26px 16px;
+  color: var(--silver);
+  font-size: 14px;
+  text-align: center;
+}
+
+.empty strong {
+  color: var(--alabaster);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------------- chips */
+
+.chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.chip.pass {
+  color: var(--refraction);
+  border-color: rgba(30, 216, 114, 0.45);
+  background: rgba(30, 216, 114, 0.09);
+}
+
+.chip.fail {
+  color: var(--twilight-te);
+  border-color: rgba(252, 84, 66, 0.45);
+  background: rgba(252, 84, 66, 0.09);
+}
+
+.chip.blocked {
+  color: var(--supernova);
+  border-color: rgba(255, 175, 46, 0.4);
+  background: rgba(255, 175, 46, 0.08);
+}
+
+.chip.neutral {
+  color: var(--silver);
+  border-color: var(--rule);
+  background: transparent;
+}
+
+.chip.sky {
+  color: var(--astrion-sky);
+  border-color: rgba(41, 170, 225, 0.45);
+  background: rgba(41, 170, 225, 0.08);
+}
+
+/* ------------------------------------------------------------------- notice */
+
+.notice {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--supernova);
+  background: var(--deep-space);
+  border-radius: 4px;
+  padding: 14px 16px;
+  margin-bottom: 22px;
+  font-size: 14px;
+  color: var(--platinum);
+}
+
+.notice.alert {
+  border-left-color: var(--twilight-te);
+}
+
+.notice.info {
+  border-left-color: var(--astrion-sky);
+}
+
+.notice h3 {
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.notice code {
+  background: var(--astrion-black);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* -------------------------------------------------------------------- forms */
+
+.search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.search input[type='search'],
+.search input[type='text'],
+.search select {
+  font-family: 'Archivo', Arial, sans-serif;
+  font-size: 13px;
+  background: var(--astrion-black);
+  color: var(--alabaster);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 8px 10px;
+  min-width: 150px;
+}
+
+.search input[type='search']:focus,
+.search select:focus {
+  outline: 2px solid var(--astrion-sky);
+  outline-offset: -1px;
+}
+
+.search input[type='search'] {
+  flex: 1 1 300px;
+}
+
+.search button {
+  font-family: 'Archivo', Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--astrion-sky);
+  color: var(--astrion-black);
+  border: 1px solid var(--astrion-sky);
+  border-radius: 3px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.search button:hover {
+  background: #3fb8ec;
+}
+
+.search a.clear {
+  font-size: 13px;
+  align-self: center;
+  color: var(--silver);
+}
+
+/* --------------------------------------------------------------- pagination */
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--silver);
+  flex-wrap: wrap;
+}
+
+.pager .links {
+  display: flex;
+  gap: 8px;
+}
+
+.pager .links a,
+.pager .links span {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 5px 11px;
+  font-size: 13px;
+}
+
+.pager .links span {
+  color: #6b7689;
+}
+
+/* ------------------------------------------------------------------- detail */
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 28px;
+  background: var(--deep-space);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 16px 20px;
+}
+
+.field {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.field .label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--silver);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.field .value {
+  font-size: 14px;
+  color: var(--alabaster);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- acceptance */
+
+.accept {
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--deep-space);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.accept .title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--alabaster);
+}
+
+.accept .detail {
+  font-size: 13px;
+  color: var(--silver);
+  margin-top: 5px;
+  max-width: 92ch;
+}
+
+.accept .n {
+  font-size: 12px;
+  color: var(--silver);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------- footer */
+
+footer.foot {
+  border-top: 1px solid var(--rule);
+  margin-top: 40px;
+  background: var(--midnight);
+}
+
+.foot-inner {
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 20px 24px 28px;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--silver);
+}
+
+.foot-inner .slogan {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--alabaster);
+  letter-spacing: 0.01em;
+}
+
+/* -------------------------------------------------------------------- small */
+
+@media (max-width: 720px) {
+  .masthead-meta {
+    text-align: left;
+  }
+
+  .accept {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
