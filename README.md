@@ -44,7 +44,18 @@ npm test
 
 The interface renders against an empty database on purpose: no data is in this repository, so
 a fresh clone has none, and every screen says what would fill it rather than showing a blank
-panel. Full setup is in **`CONTRIBUTING.md`**; deploying it is in **`docs/DEPLOY.md`**.
+panel. Full setup is in **`CONTRIBUTING.md`**.
+
+To put it on Azure Container Apps, from nothing, in one command:
+
+```bash
+az login
+./scripts/deploy-azure.sh --resource-group cie --location eastus
+```
+
+That creates the registry, database, environment, migration job and app, and prints the URL.
+It is also the redeploy command. **`docs/DEPLOY.md`** covers the rest, including public
+ingress and the fact that the interface has no authentication.
 
 ## The interface
 

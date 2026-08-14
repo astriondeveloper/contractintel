@@ -50,76 +50,129 @@ npm run load -- --dir /path/to/exports
 Nothing is a secret except `DATABASE_URL`. It carries a password, so it belongs in a secret
 store rather than in a deployment manifest.
 
-## Azure Container Apps
+## Azure Container Apps, from nothing
 
-Spec section 2.3. The image is the same one CI builds; nothing about it is Azure-specific.
-
-Build and push:
-
-```bash
-az acr build --registry <registry> --image cie:$(git rev-parse --short HEAD) .
-```
-
-Create the app, with the connection string as a secret rather than a plain variable:
+Spec section 2.3. One command, and it is also the redeploy command: it creates what is
+missing and leaves alone what is already there.
 
 ```bash
-az containerapp create \
-  --name cie \
-  --resource-group <group> \
-  --environment <container-apps-environment> \
-  --image <registry>.azurecr.io/cie:<tag> \
-  --target-port 3000 \
-  --ingress internal \
-  --secrets db-url="postgresql://<user>:<password>@<server>.postgres.database.azure.com:5432/cie" \
-  --env-vars DATABASE_URL=secretref:db-url PGSSLMODE=require \
-  --min-replicas 1 --max-replicas 3
+az login
+./scripts/deploy-azure.sh --resource-group cie --location eastus
 ```
 
-Four things to get right:
+It creates a resource group, a container registry, a PostgreSQL 16 flexible server, a
+Container Apps environment, a migration job, and the app; builds the image in the registry
+rather than locally, so no Docker daemon is needed; runs the migrations as a one-off job;
+and prints the URL.
 
-**`--ingress internal`, not `external`.** The interface has no authentication. It is a window
-on the corpus, and the corpus is the thing Gate A is careful about. Put it behind the
-network boundary, or behind an authentication proxy, before making it reachable from the
-internet. Container Apps can front it with Microsoft Entra authentication if it needs to be
-reachable from outside the VNet.
+The database password is generated on the first run and printed once. Azure will not read
+it back, so keep it: a redeploy against the same server needs it as `DB_PASSWORD`.
 
-**`PGSSLMODE=require`.** Azure Database for PostgreSQL rejects an unencrypted connection.
-Without this the app starts and every screen reports a database error.
+To publish it on the internet:
 
-**Migrations are a job, not a startup step.** The app does not migrate on boot, deliberately:
-several replicas racing the same forward-only migration is a bad way to find out that
-migrations are not idempotent under concurrency. Run them once, as a job, before the
-revision goes live:
+```bash
+./scripts/deploy-azure.sh --resource-group cie --location eastus --ingress external
+```
+
+Read the next section before you do.
+
+### Ingress, and the fact that there is no authentication
+
+**The interface has no authentication.** With `--ingress external`, anyone with the URL
+reads the whole corpus. That is a property of the build, not an oversight, and public
+ingress does not make it safe — it makes it a decision.
+
+`docs/DECISIONS.md` **D12** records that decision: everything the system currently holds is
+open-source intelligence, so publishing it costs nothing that is not already public. Two
+things follow.
+
+**The default is still `internal`.** Public ingress is something a deploy asks for
+explicitly, because the argument for it is about today's corpus rather than about the
+software.
+
+**It stops being appropriate when the corpus stops being OSINT.** Pipeline judgements,
+capture strategy, and the `campaign` and `pursuit` tables are Astrion's own thinking rather
+than a public record. The scoring engine is the phase that starts filling them. Authentication
+belongs to that same phase as the first write screen, because spec section 20's audit trail
+needs an identity to attribute a change to. Until then, `internal` plus the VNet, or
+Container Apps' built-in Microsoft Entra authentication, is a five-minute change:
+
+```bash
+az containerapp auth microsoft update \
+  --name cie-web --resource-group cie \
+  --client-id <app-registration-id> --tenant-id <tenant> \
+  --issuer "https://login.microsoftonline.com/<tenant>/v2.0"
+az containerapp auth update --name cie-web --resource-group cie \
+  --unauthenticated-client-action RedirectToLoginPage
+```
+
+### Redeploying from GitHub
+
+`.github/workflows/deploy.yml` does the second deploy onwards: build the image, run the
+migration job, wait for it, roll the app, check `/healthz`. It never needs the connection
+string, because that is already a Container Apps secret on both the job and the app.
+
+After the first `scripts/deploy-azure.sh` run, set these repository **variables**:
+
+| Variable | Value |
+|---|---|
+| `AZURE_RESOURCE_GROUP` | The resource group you passed |
+| `AZURE_REGISTRY` | The registry name the script printed |
+| `AZURE_APP` | `cie-web`, unless you changed `--prefix` |
+| `AZURE_MIGRATE_JOB` | `cie-migrate`, unless you changed `--prefix` |
+| `DEPLOY_ON_PUSH` | `true` to deploy on every push to `main`. Leave unset for manual only. |
+
+And one credential, either:
+
+- **OpenID Connect**, preferred, nothing long-lived stored: variables `AZURE_CLIENT_ID`,
+  `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, with a federated credential on the app
+  registration scoped to this repository.
+- **A service principal**: secret `AZURE_CREDENTIALS`, the JSON from
+  `az ad sp create-for-rbac --sdk-auth`.
+
+The workflow runs in the `production` environment, so adding a required reviewer there gates
+every deploy behind an approval.
+
+### Migrations are a job, not a startup step
+
+The app does not migrate on boot, deliberately. Several replicas racing the same
+forward-only migration is a bad way to find out whether the runner is safe under
+concurrency, and a migration failure should stop a deploy rather than crash-loop a revision.
+Both the script and the workflow run the job first and roll the app only if it succeeds.
+
+### The scheduled load
+
+Spec decision D8 permits scheduled file drops and forbids ad hoc upload, so the load is a
+second job against a mounted share rather than an endpoint on the interface:
 
 ```bash
 az containerapp job create \
-  --name cie-migrate --resource-group <group> \
-  --environment <container-apps-environment> \
-  --image <registry>.azurecr.io/cie:<tag> \
-  --trigger-type Manual --replica-timeout 600 \
+  --name cie-load --resource-group cie --environment cie-env \
+  --image <registry>.azurecr.io/cie:latest \
+  --trigger-type Schedule --cron-expression "0 6 * * *" \
   --secrets db-url="..." \
-  --env-vars DATABASE_URL=secretref:db-url PGSSLMODE=require \
-  --command "npm" --args "run,migrate"
+  --env-vars DATABASE_URL=secretref:db-url PGSSLMODE=require CIE_DROP_DIR=/app/data/drops \
+  --command "npm" --args "run,load"
 ```
 
-**The scheduled load is a second job.** Spec decision D8 permits scheduled file drops and
-forbids ad hoc upload, so the load runs on a schedule against a mounted share
-(`CIE_DROP_DIR`), never as an endpoint on the interface. Give it
-`--trigger-type Schedule` and the same image with `--args "run,load"`.
+Mount the share the scheduled export writes into at `/app/data/drops`. Every loader is
+idempotent, so a job that runs against an unchanged folder reports zero new and writes
+nothing.
 
 ### Health probes
 
 `/healthz` returns 200 with `{"status":"ok"}` when the database is reachable and 503 when it
 is not. It does not depend on a corpus being loaded, so it is a correct readiness probe on a
-fresh deployment. The `Dockerfile` already declares a `HEALTHCHECK` against it.
+fresh deployment. The `Dockerfile` declares a `HEALTHCHECK` against it.
 
 ## What is deliberately not here
 
-**No authentication.** The interface reads; it does not write, and the router returns 405 to
-anything but `GET` and `HEAD`. That makes it safe to run beside a database, not safe to
-publish. Access control belongs at the network or proxy layer until spec section 20's audit
-trail exists, at which point the write screens arrive with it.
+**No static hosting.** Every screen is a live query against the database. There is nothing
+to publish to a static host, and a snapshot of the corpus committed to a repository would be
+wrong the day after it was taken.
 
-**No static hosting.** Every screen is a live query. There is nothing to publish to a static
-host, and a snapshot of the corpus checked into a repository or pushed to a public host is
-exactly what Gate A forbids.
+**No data in the image.** `docs/DECISIONS.md` D11 keeps the seed files out of the repository
+and out of the image, and D12 leaves that unchanged for a reason that survives the OSINT
+finding: a repository is a bad place for a snapshot regardless of how sensitive it is, and
+the authored seed files are Astrion's judgement about which spellings are one company rather
+than any part of the public record.
