@@ -53,6 +53,14 @@ USER node
 EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Default to reporting migration status, which is safe and says what state the
-# database is in. A deployment overrides this with the command it needs.
-CMD ["npm", "run", "migrate:status"]
+# Serve the interface by default. It is the only long-running process in the build and
+# the thing Azure Container Apps is asked to run, so the image should do it without an
+# override; the migrate and load services in docker-compose.yml pass their own command.
+#
+# The interface is read only and starts against an unmigrated database without failing,
+# so a container that comes up before its migration job has finished reports the
+# problem on screen rather than crash-looping.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["npm", "run", "web"]

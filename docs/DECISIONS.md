@@ -255,6 +255,46 @@ thing to move to the status document; if more loosely, company names could come 
 
 ---
 
+## D12. The repository is public, and the interface may be deployed with public ingress
+
+**Decided by Gavin Taylor, 14 August 2026**, on the ground that everything the system holds
+is open-source intelligence: FPDS is a public record, and the DACIS material is a commercial
+aggregation of public sources rather than anything Astrion is under an obligation to keep.
+
+`astriondeveloper/contractintel` is public. `docs/GITHUB_SETUP.md` had specified a private
+repository in the Astrion organisation, written before this was settled; where the two
+disagree, this entry is the later decision and it wins.
+
+**What does not change.** D11 stands in full, and for a different reason than secrecy. The
+seed files stay out of the repository, the image still does not bake them in, the fixtures
+stay synthetic, and CI still fails on a tracked file under `data/seed/`. Two arguments
+survive the OSINT finding intact:
+
+- **A repository is a bad place for data regardless of its sensitivity.** The seed files are
+  a snapshot. Committing one means every clone carries a copy that is wrong the moment the
+  export is refreshed, and `git` keeps every version of it forever.
+- **The authored seed files are Astrion's judgement, not the public record.** The entity map
+  and the watchlist encode which spellings are the same company and who is worth watching.
+  That is analysis, and it is the part with value in it.
+
+So the rule is unchanged and only its justification is narrower: data does not belong in the
+repository because it is data, not because it is secret.
+
+**What does change.** Deployment gets a public option. `docs/DEPLOY.md` previously insisted
+on internal ingress; it now offers both and says what each costs. The interface has no
+authentication, so public ingress means anyone with the URL reads the corpus. That follows
+from the OSINT finding rather than being made safe by it, and two things stay true:
+
+- **Public ingress is a per-deployment choice, not a default.** `scripts/deploy-azure.sh`
+  takes `--ingress external` explicitly and defaults to internal.
+- **It stops being appropriate the moment the corpus stops being OSINT.** Pipeline
+  judgements, capture strategy, and the campaign and pursuit tables are Astrion's own
+  thinking. The scoring engine is the phase that starts filling them, and authentication
+  belongs to the same phase as the first write screen, since spec section 20's audit trail
+  needs an identity to attribute a change to.
+
+---
+
 ## Open questions
 
 **Gate B — is the GovWin API available?** Owner: Gavin.

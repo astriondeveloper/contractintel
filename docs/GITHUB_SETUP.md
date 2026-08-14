@@ -37,6 +37,13 @@ seed files and the real identifiers straight back into history.
 
 ## Create the repository
 
+> **Superseded on 14 August 2026.** The repository is `astriondeveloper/contractintel` and it
+> is **public**, decided on the ground that everything the system holds is open-source
+> intelligence. `docs/DECISIONS.md` **D12** records that and says what it does and does not
+> change: D11 stands in full, and no data may be committed regardless. The paragraph below is
+> what was specified before that was settled, kept because the rest of this checklist assumes
+> the repository was made the way it describes.
+
 Private, in the Astrion organisation. Do **not** initialise it with a README, licence or
 `.gitignore` — this repository has its own and GitHub's would conflict on the first push.
 

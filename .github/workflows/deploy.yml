@@ -1,0 +1,146 @@
+name: Deploy
+
+# Redeploy the interface to Azure Container Apps.
+#
+# This is the second deploy onwards. The first one is scripts/deploy-azure.sh, which
+# creates the registry, the database, the environment, the migration job and the app.
+# Once those exist a deploy is three steps — build the image, migrate, roll the app —
+# and none of them needs the connection string, because it is already a Container Apps
+# secret on both the job and the app.
+#
+# Manual by default. Set the repository variable DEPLOY_ON_PUSH to 'true' to deploy on
+# every push to main instead: a deploy that fires without anyone asking is a decision,
+# not a default.
+on:
+  workflow_dispatch:
+    inputs:
+      skip_migrations:
+        description: 'Skip the migration job (only if you know nothing new was added)'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build, migrate, roll
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A push only deploys when the repository opts in. workflow_dispatch always does.
+    if: github.event_name == 'workflow_dispatch' || vars.DEPLOY_ON_PUSH == 'true'
+
+    # Configure this environment with a required reviewer to gate production deploys.
+    environment: production
+
+    permissions:
+      contents: read
+      # For azure/login with OpenID Connect, which is the credential-free path.
+      id-token: write
+
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      REGISTRY: ${{ vars.AZURE_REGISTRY }}
+      APP: ${{ vars.AZURE_APP || 'cie-web' }}
+      MIGRATE_JOB: ${{ vars.AZURE_MIGRATE_JOB || 'cie-migrate' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the deploy is configured
+        run: |
+          missing=""
+          [ -n "$RESOURCE_GROUP" ] || missing="$missing AZURE_RESOURCE_GROUP"
+          [ -n "$REGISTRY" ] || missing="$missing AZURE_REGISTRY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository variable(s):$missing."
+            echo "Run scripts/deploy-azure.sh once to create the stack, then set them."
+            exit 1
+          fi
+
+      # Either credential works. OIDC is preferred: nothing long-lived is stored.
+      # Set AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID as variables with a
+      # federated credential on the app registration, or fall back to the AZURE_CREDENTIALS
+      # service-principal JSON as a secret.
+      - name: Sign in to Azure with OpenID Connect
+        if: vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to Azure with a service principal
+        if: vars.AZURE_CLIENT_ID == ''
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Install the containerapp extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      # Built by ACR rather than by this runner: same architecture as the one it runs on,
+      # and no registry credentials cross the runner.
+      - name: Build the image
+        run: |
+          az acr build --registry "$REGISTRY" \
+            --image "cie:${{ github.sha }}" --image "cie:latest" \
+            --file Dockerfile .
+
+      # Before the app rolls, not after. A revision that starts against a schema it is
+      # newer than is the failure this ordering exists to prevent.
+      - name: Apply migrations
+        if: inputs.skip_migrations != true
+        run: |
+          az containerapp job update \
+            --name "$MIGRATE_JOB" --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY.azurecr.io/cie:${{ github.sha }}" --only-show-errors -o none
+          az containerapp job start \
+            --name "$MIGRATE_JOB" --resource-group "$RESOURCE_GROUP" --only-show-errors -o none
+
+          # Wait for it, and fail the deploy if it fails. A migration that errors must
+          # stop the roll rather than be discovered by the first request afterwards.
+          for attempt in $(seq 1 60); do
+            state=$(az containerapp job execution list \
+              --name "$MIGRATE_JOB" --resource-group "$RESOURCE_GROUP" \
+              --query "sort_by([], &properties.startTime)[-1].properties.status" -o tsv)
+            echo "  migration job: ${state:-starting}"
+            case "$state" in
+              Succeeded) exit 0 ;;
+              Failed|Degraded)
+                echo "::error::The migration job reported $state. The app was not rolled."
+                exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::The migration job did not finish within ten minutes."
+          exit 1
+
+      - name: Roll the interface
+        run: |
+          az containerapp update \
+            --name "$APP" --resource-group "$RESOURCE_GROUP" \
+            --image "$REGISTRY.azurecr.io/cie:${{ github.sha }}" --only-show-errors -o none
+
+      - name: Check it answers
+        run: |
+          fqdn=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.configuration.ingress.fqdn' -o tsv)
+          if [ -z "$fqdn" ]; then
+            echo "Ingress is internal, so this runner cannot reach it. Nothing to check."
+            exit 0
+          fi
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://$fqdn/healthz" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "https://$fqdn is up."
+              echo "### Deployed: https://$fqdn" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::https://$fqdn/healthz did not return 200 within five minutes."
+          exit 1
