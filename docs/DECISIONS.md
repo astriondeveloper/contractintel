@@ -1,0 +1,268 @@
+# Decisions
+
+Every place this build departs from `CIE_Build_Spec_v1.0.md`, or resolves something the
+spec left open. The spec is the controlling document; each entry says what it says, what was
+done instead, and what forced it.
+
+Order is chronological. Nothing here is a preference — every one was forced by the real data
+or by a contradiction in the spec, and each names the measurement that forced it.
+
+---
+
+## D1. A UEI does not identify one entity
+
+**Spec 8.2** gives the resolution order as UEI, then CAGE, then a confirmed alias, then a
+review candidate. That assumes a UEI identifies one entity.
+
+**It does not.** In `astrion_entity_map_seed.csv`, four UEI values and four CAGE values each
+belong to two legacy entities, because registrations carried forward through the rollup:
+
+| Identifier | Legacy entities |
+|---|---|
+| `ZZ1TESTUEI01` / `ZC001` | Northwind Group, LLC and Beacon Research, Inc. |
+| `ZZ2TESTUEI02` / `ZC002` | Cardinal LLC and Quantalytic |
+| `ZZ3TESTUEI03` / `ZC003` | Cardinal LLC and Meridian Engineering |
+| `ZZ4TESTUEI04` / `ZC004` | Larkspur, Incorporated and Halcyon Systems, LLC |
+
+A unique constraint on the identifier would have rejected the real data.
+
+**Decision.** All eight collisions sit inside one family, so a UEI still identifies the
+*family* unambiguously. The resolver treats an ambiguous identifier as a partial result: it
+holds the candidate set, continues to the alias step which resolves the legacy entity
+precisely, and falls back to the shared parent only if the alias step also fails. The steps
+still run in spec order. Reported by the `identifier_collision` view.
+
+**Also worth knowing.** Real award rows carry UEIs that are *not* in the seed map: a legacy
+entity turns up under a registration the authored map does not list. Those rows resolve at
+the alias step, which is why UEI coverage is well short of the whole corpus. The figures are
+in the Phase 1 status document.
+
+---
+
+## D2. An unconfirmed authored alias still resolves
+
+**Spec 8.2 step 3** says to match on a *confirmed* alias. **Spec section 20** ships all 50
+seed rows with `confirmed_by_bd_ops = NO`.
+
+Read together, nothing resolves by name until a person has confirmed all 50 rows, and
+acceptance test 1 cannot pass on a fresh database.
+
+**Decision.** The authored map is authoritative per spec 8.1 ("load the authored map"), and
+confirmation is a quality signal on top of it:
+
+- confirmed alias → confidence `confirmed`
+- unconfirmed authored alias → confidence `probable`
+- no match → `unresolved`, and the row goes to the review queue
+
+The strict reading is available: `EntityResolver.load(client, { requireConfirmedAlias: true })`.
+Both behaviours are tested.
+
+---
+
+## D3. The surrogate transaction number is the default
+
+**Spec 7.2** keys `contract_action` on
+`(awarding_agency_code, piid, modification_number, transaction_number)`.
+
+**The export leaves `Transaction #` blank on all 49,013 rows.** FPDS-NG uses that column to
+distinguish several transactions recorded against one modification, so the key degenerates to
+three components and distinct transactions overwrite each other. Measured:
+
+| | |
+|---|---:|
+| Modifications carrying more than one distinct transaction | 2,023 |
+| Payloads the upsert overwrote | 4,912 |
+| Action Obligation absent from `contract_action` | **$1,871,754,225** |
+
+That is 18.6 percent of the $10.08bn corpus total — enough to change any ranking section 10
+derives from contract value.
+
+**Decision, taken by Gavin Taylor on 14 August 2026 with those figures in front of him.**
+A blank transaction number is replaced by `H:` plus 12 hex characters of a SHA-256 over the
+row's mapped payload with `transaction_number` removed. Deterministic, order-independent,
+does not include itself, so the loader stays idempotent — verified by loading the corpus
+twice, the second pass reporting all 49,013 rows unchanged.
+
+**The cost.** The surrogate is content-derived, so an upstream correction to a mapped field
+arrives as an additional action rather than an update. Audit columns are not mapped, so a
+re-export that only touches timestamps does not trigger it.
+
+**The handover needs no code change.** A row carrying a real transaction number always uses
+it, so when the export is fixed the surrogate stops firing file by file. Populating that
+column is an open external action.
+
+`--spec-transaction-key` restores the literal reading and reports what it drops.
+`fpds_collapse_summary` quantifies it at any time.
+
+---
+
+## D4. `Contractor: DACIS: Parent Name` is read but never used to resolve
+
+The FPDS export carries Deltek's own view of which parent a contractor rolls up to. **Spec
+8.2 does not list it** as a match step.
+
+**Decision.** The loader reads it, archives it in the payload, and reports how many
+otherwise-unresolved rows it would have rescued — so adding it to 8.2 can be decided from a
+number rather than an opinion. It never affects resolution.
+
+On this corpus the answer is zero, because the authored map resolves everything. The
+instrumentation is there for the next corpus, where a spelling outside the 50 will appear.
+
+---
+
+## D5. The subcontract loader stores no direction
+
+**Spec section 20** states 662 rows where Astrion is the sub and 3,381 where it is the prime.
+Those are exactly the in-file and out-file row counts.
+
+**Decision.** No direction column. "in" and "out" are relative to whichever company Deltek
+was queried about, not properties of the relationship, and every row names its own prime and
+sub. The same record appears in both files when both parties are Astrion, so it must land as
+one edge. `teaming_direction` derives direction from which side resolves into the family.
+
+Derived from the data: 3,382 prime, 660 sub. The two-row difference from the spec is fully
+accounted — one row with no sub name, one intra-family an intra-family edge, and one
+a third-party-to-third-party edge with no Astrion party on it at all.
+
+---
+
+## D6. An unresolved subcontract counterparty is not queued for review
+
+**Spec 8.2** sends an unresolvable vendor to `vendor_review_queue`.
+
+**For subcontract counterparties that would mean roughly 900 external companies** — the
+graph names 936 distinct sub names against a 45-company watchlist — which would make the
+queue useless for the thing it exists for.
+
+**Decision.** An edge with one side resolved is kept, with both raw names and both CAGE
+codes, and `teaming_direction` picks it up as soon as the counterparty becomes known. Only an
+edge where *neither* side resolves is queued, because only that edge cannot be placed
+relative to Astrion at all. On the real corpus that is 1 row out of 4,042.
+`subcontract_edge_unplaced` lists them.
+
+---
+
+## D7. The DACIS contract loader must be told Astrion's role
+
+This looks inconsistent with D5 and is the opposite case for a measured reason.
+
+| role | rows | Astrion in `Companies` | in `Other Bidders` | neither |
+|---|---:|---:|---:|---:|
+| prime | 234 | 234 | 2 | 0 |
+| out | 19 | 19 | 0 | 0 |
+| sub | 141 | 11 | 2 | 128 |
+| loss | 40 | 2 | 8 | 31 |
+
+A prime row always names Astrion, so it is self-describing. A subcontract row usually names
+it nowhere — the row describes the prime contract. A loss row names it nowhere on 31 of 40.
+
+**Decision.** The export is the only carrier of the role for two of the four shapes, so the
+loader records what it was told. `role_source` says whether a human declared it or the
+filename was read. Role lives in `dacis_contract_role`, not on the contract, because 18 of
+213 contracts arrive under more than one role.
+
+---
+
+## D8. `Other Bidders` is stored as evidence and nothing scores on it
+
+It is the only place in the corpus naming who else bid, which makes it tempting.
+
+**It is populated on 26 of 434 rows (6 percent), naming 18 distinct companies.**
+`Programs-Losses` is populated on **zero** rows.
+
+**Decision.** Store `Other Bidders` in full, in `dacis_contract_company` with
+`company_role = 'other_bidder'`, and build no scoring factor on it. At 6 percent coverage a
+factor derived from it would rank on whether Deltek happened to record the bidders rather
+than on anything about the competition. `dacis_other_bidder` exposes it as evidence on a
+specific competition.
+
+---
+
+## D9. Lost-as-prime plus held-as-sub is an outcome, not a conflict
+
+Migration 0017 flagged any contract asserted both as a loss and as won. Five rows, and four
+were `loss` + `sub`.
+
+**That combination is coherent and common:** Astrion bid the prime, did not win, and holds a
+subcontract on the winning team. It is one of the more actionable facts in the corpus,
+because it names competitions where Astrion is already inside the winning team and could bid
+the prime at recompete — including a $1.48bn Example SB Pool 6 task order ending 2028-07-17.
+
+**Decision (migration 0018).** Split into two views.
+`dacis_contract_lost_prime_won_sub` is a pursuit list and names the winner.
+`dacis_contract_role_conflict` is narrowed to `loss` together with `prime` or `out`, which
+cannot both be true — one row — and names the disagreeing export files.
+
+A view called "conflict" that is 80 percent legitimate outcomes teaches people to ignore it.
+
+---
+
+## D10. Truncation is measured before de-duplication
+
+The DACIS programs export caps its participant column at 500.
+
+**Testing the de-duplicated count against the cap misses more than half of them.** Ten
+programs were emitted at the cap; only four have 500 *distinct* participants, because the
+cells repeat names.
+
+**Decision.** `participant_list_truncated` is computed from `rawListLength`, the count of
+entries the export emitted, before de-duplication. This was a real bug caught by comparing
+the loader's output against an independent measurement of the same files.
+
+---
+
+## D11. No DACIS-derived data in this repository
+
+**Gate A, spec section 6**, asked whether DACIS-derived data may be stored. Answered
+**no** on 14 August 2026.
+
+**What was in the repository before the answer arrived.** The three authored seed CSVs, and
+test fixtures whose company names, UEIs and CAGE codes were taken from the real entity map —
+deliberately, on the argument that a fixture with invented names tests the CSV parser rather
+than the resolver. That argument was right about the risk and wrong about the remedy.
+
+**Decision.** The remedy keeps the argument intact. `tests/seed/` holds a synthetic set that
+reproduces every structural property the real map has and the tests rely on: four UEIs and
+four CAGE codes each shared by two legacy entities, spellings differing only in punctuation,
+an authored misspelling, a near neighbour that must stay separate, a near miss that must not
+resolve, a parenthetical that is part of a name, and every row unconfirmed.
+`tests/seed/README.md` tabulates each property against the test that needs it. So the tests
+still exercise resolution rather than parsing, and no real company appears.
+
+Consequences, all of them mechanical once the property table existed:
+
+- `CIE_SEED_DIR` was already the only route to the seed files, so the application needed no
+  change. `.gitignore` excludes `data/seed/*`.
+- `Dockerfile` stopped copying `data/seed`; the directory is an empty mount point. Baking the
+  files in would put them in every image layer and every registry the image reaches.
+- Acceptance test 3 hardcoded two real spellings. It now discovers the punctuation-variant
+  group from the loaded map and asserts the property spec 8.3 actually states, so it passes
+  on the real corpus and on the synthetic one. Better than it was.
+- Measured findings about real contracts moved to the Phase 1 status document. Aggregates
+  stay here where a decision is unintelligible without them.
+- The four earlier commits contained the CSVs and the real identifiers. Untracking does not
+  remove them from history, so the history was rewritten to a single initial commit. Nothing
+  had been pushed, so this cost nothing.
+- CI fails on a tracked file under `data/seed/` and warns on anything shaped like a real UEI.
+  A rule with no check is a rule that lapses.
+
+**What remains a judgement call.** Aggregate figures derived from the corpus, and the names
+of real competitor companies in analytical prose, are not source data but are arguably
+derived from it. This repository keeps aggregates and no company names. If Contracts reads
+Gate A more strictly, the aggregates in this file and in the migration headers are the next
+thing to move to the status document; if more loosely, company names could come back into
+`docs/BACKLOG.md` where they would make two items more concrete.
+
+---
+
+## Open questions
+
+**Gate B — is the GovWin API available?** Owner: Gavin.
+
+**Gate C — does the Salesforce Opportunity hold a government key?** Owner: BD Ops.
+
+**Short PIIDs are not unique.** Agency 9700 PIID `0001` modification `0` carries 58 distinct
+payloads; `0002` and `0003` are similar. Anything that groups contract actions by PIID —
+recompete detection especially — has to handle it. Not yet investigated.
+
+**Populate `Transaction #` in the DACIS/FPDS export.** See D3. No code change follows.

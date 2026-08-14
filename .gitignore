@@ -1,0 +1,19 @@
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+.next/
+coverage/
+*.log
+# Gate A came back no on 14 August 2026: DACIS-derived data may not live in this
+# repository. The real seed files reach a running system through CIE_SEED_DIR and are
+# never committed. tests/seed/ holds a synthetic set for the test suite and CI.
+# The status document records measured findings about real contracts and companies, so it
+# is a deliverable rather than repository content. It lives with the specification.
+CIE_Phase1_Status.md
+data/seed/*
+!data/seed/.gitkeep
+data/drops/*
+!data/drops/.gitkeep
+.DS_Store

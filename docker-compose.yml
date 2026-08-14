@@ -1,0 +1,58 @@
+# Local development. PostgreSQL 16, per spec section 16.
+#
+# The application talks to this database through DATABASE_URL and nothing else, so
+# the same image runs against Azure Database for PostgreSQL Flexible Server with no
+# change beyond that variable and PGSSLMODE=require.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: cie
+      POSTGRES_PASSWORD: cie_local_only
+      POSTGRES_DB: cie
+    ports:
+      - '5432:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cie -d cie']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: bring the schema up to date, then load the three seed files.
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://cie:cie_local_only@db:5432/cie
+      CIE_SEED_DIR: /app/data/seed
+    # The seed files are not in the repository or the image: they are DACIS-derived and
+    # Gate A came back no. Put the three authored CSVs in ./data/seed locally, which
+    # .gitignore excludes, and they reach the container through this mount. With the
+    # directory empty the seed step reports zero rows and migrations still apply.
+    volumes:
+      - ./data/seed:/app/data/seed:ro
+    command: sh -c "npm run migrate && npm run seed"
+
+  # The scheduled load. Point ./data/drops at wherever the scheduled job writes the
+  # exports. `npm run load` reads each file's header row, works out which of the five
+  # shapes it is, and loads them in dependency order, so one mount handles the whole
+  # export folder. Safe to run repeatedly: every loader is idempotent.
+  load:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://cie:cie_local_only@db:5432/cie
+      CIE_DROP_DIR: /app/data/drops
+    volumes:
+      - ./data/drops:/app/data/drops:ro
+    command: npm run load
+
+volumes:
+  db_data:

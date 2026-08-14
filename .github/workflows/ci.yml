@@ -1,0 +1,134 @@
+name: CI
+
+# Every push and every pull request. The test suite runs against a real PostgreSQL 16,
+# because that is the only way a passing test says anything about the shipped code path:
+# there are no mocks in this repository and the schema is 18 SQL migrations rather than an
+# ORM's opinion, so a test against a fake database would test the fake.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch cancels the first. Nothing here is a deploy.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: migrate, seed, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: cie
+        ports:
+          - 5432:5432
+        # Without this the first migration can race the server's startup.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The test harness derives cie_test from this by swapping the database name, and
+      # connects to /postgres to drop and recreate it, so the role needs CREATEDB. The
+      # default postgres superuser has it.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cie
+      # The authored seed files are DACIS-derived and are not in this repository: Gate A
+      # came back no on 14 August 2026. CI seeds from the synthetic set in tests/seed,
+      # which reproduces every structural property the tests depend on with invented
+      # companies. tests/seed/README.md lists those properties.
+      CIE_SEED_DIR: ./tests/seed
+      CIE_DROP_DIR: ./data/drops
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # ci, not install: the lockfile is the contract. A dependency that drifted between
+      # the lockfile and package.json should fail here rather than in someone's branch.
+      - name: Install dependencies
+        run: npm ci
+
+      # A tracked file under data/seed, or a real-looking identifier anywhere in the tree,
+      # means DACIS-derived data has been committed. Cheap to check on every push, and far
+      # cheaper than discovering it after the fact.
+      - name: No DACIS-derived data committed
+        run: |
+          if git ls-files data/seed | grep -qvE '(^|/)\.gitkeep$'; then
+            echo "::error::A file under data/seed/ is tracked. Gate A forbids it."
+            git ls-files data/seed
+            exit 1
+          fi
+          # Synthetic identifiers use a ZZ prefix for UEIs and Z for CAGE codes, so a
+          # 12-character alphanumeric token that is not one of those is worth a look.
+          if git grep -nIE '\b[A-HJ-NP-Z0-9]{12}\b' -- 'src' 'tests' 'migrations' \
+               | grep -vE 'ZZ[0-9]TESTUEI[0-9]{2}' \
+               | grep -viE 'transactionnumber|modificationnumber|awardingagency|contractingagency|fundingagency|classification|documentation|configuration|implementation|instrumentation|participants|relationship|subcontracts|deobligation|SUPPORTPROFES' ; then
+            echo "::warning::Tokens above look like identifiers. Confirm none is a real UEI."
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Apply migrations
+        run: npm run migrate
+
+      # Applying twice must be a no-op. The runner checksums each file and refuses a change
+      # to one already applied, so this also catches an edited migration.
+      - name: Migrations are idempotent
+        run: |
+          npm run migrate
+          npm run migrate:status
+
+      - name: Load seed files
+        run: npm run seed
+
+      - name: Seed loaders are idempotent
+        run: npm run seed
+
+      - name: Tests
+        run: npm test
+
+      # Acceptance tests are expected to report blocked items until the remaining phases
+      # exist. A FAIL is what must not happen, so that is what is checked.
+      - name: Acceptance tests report no failures
+        run: |
+          npm run accept | tee acceptance.log
+          if grep -qE '^FAIL' acceptance.log; then
+            echo "::error::An acceptance test failed. Blocked is expected; failed is not."
+            exit 1
+          fi
+          grep -E '^[0-9]+ pass' acceptance.log || true
+
+      - name: Upload acceptance output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-log
+          path: acceptance.log
+          retention-days: 14
+
+  # A second job so a Docker problem is distinguishable from a test failure. The
+  # Dockerfile is how this deploys to Azure Container Apps, per spec section 2.3, and an
+  # image that stopped building would otherwise only be discovered at deploy time.
+  image:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t cie:ci .

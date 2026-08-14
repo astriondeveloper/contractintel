@@ -1,0 +1,15 @@
+node_id,node_name,node_type,psc_crosswalk,agency_crosswalk,naics_crosswalk,customer_offices_freetext,fy19plus_obligations_musd,growth_priority_TBD,confirmed_by_bd_ops
+CAP-01,Flight test and evaluation engineering support,capability,R425,5700,541330;541712,Test wings and centres,2249.5, ,NO
+CAP-02,Systems engineering and technical assistance,capability,R408,5700,541330,Program executive offices,1877.2, ,NO
+CAP-03,Range operations and instrumentation,capability,R499,5700,541330;541715,Range squadrons,912.4, ,NO
+CAP-04,"Modelling, simulation and analysis",capability,R425,9700,541330;541715,Analysis directorates,744.9, ,NO
+CAP-05,Software engineering and digital infrastructure,capability,D399,9700,541511;541512,Software directorates,688.1, ,NO
+CAP-06,Cybersecurity and information assurance,capability,D310,9700,541512;541519,Cyber directorates,521.7, ,NO
+CAP-07,Space systems engineering support,capability,R425,5700,541330,Space deltas,498.3, ,NO
+CAP-08,Missile and munitions engineering,capability,R425,2100,541330;541715,Missile program offices,455.6, ,NO
+CAP-09,Logistics and sustainment engineering,capability,R706,2100,541614;541330,Sustainment centres,402.8, ,NO
+CAP-10,Acquisition and program management support,capability,R408,5700,541611,Program offices,388.4, ,NO
+CAP-11,Human systems and training support,capability,R425,5700,541330;611430,Training wings,277.1, ,NO
+CAP-12,Test instrumentation manufacturing,capability,R425,5700,334519,Instrumentation shops,201.5, ,NO
+CAP-13,Intelligence analysis support,capability,R499,9700,541715,Intelligence squadrons,188.9, ,NO
+CAP-14,Environmental and safety engineering,capability,R425,5700,541620,Civil engineering squadrons,96.2, ,NO
