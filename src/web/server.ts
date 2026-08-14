@@ -24,6 +24,7 @@ import { html } from './html.js';
 import type { Ctx } from './shell.js';
 
 import { overview, overviewJson } from './pages/overview.js';
+import { upcoming, upcomingJson } from './pages/upcoming.js';
 import { entityDetail, entityList } from './pages/entities.js';
 import { contracts } from './pages/contracts.js';
 import { subcontracts } from './pages/subcontracts.js';
@@ -79,6 +80,7 @@ type Handler = (ctx: Ctx) => Promise<string>;
 
 const ROUTES: Record<string, Handler> = {
   '/': overview,
+  '/upcoming': upcoming,
   '/entities': entityList,
   '/contracts': contracts,
   '/subcontracts': subcontracts,
@@ -94,6 +96,7 @@ const ROUTES: Record<string, Handler> = {
 
 const JSON_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/overview': overviewJson,
+  '/api/upcoming': upcomingJson,
   '/api/acceptance': acceptanceJson,
   '/api/quality': qualityJson,
 };

@@ -30,6 +30,7 @@ import type { Ctx } from '../src/web/shell.js';
 import { escape } from '../src/web/html.js';
 
 import { overview } from '../src/web/pages/overview.js';
+import { upcoming } from '../src/web/pages/upcoming.js';
 import { entityDetail, entityList } from '../src/web/pages/entities.js';
 import { contracts } from '../src/web/pages/contracts.js';
 import { subcontracts } from '../src/web/pages/subcontracts.js';
@@ -54,6 +55,7 @@ interface Screen {
 
 const SCREENS: readonly Screen[] = [
   { key: 'overview', label: 'Overview', path: '/', render: overview },
+  { key: 'upcoming', label: 'Upcoming', path: '/upcoming', render: upcoming },
   { key: 'entities', label: 'Entities', path: '/entities', render: entityList },
   { key: 'contracts', label: 'Contract actions', path: '/contracts', render: contracts },
   { key: 'subcontracts', label: 'Subcontracts', path: '/subcontracts', render: subcontracts },

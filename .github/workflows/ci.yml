@@ -125,9 +125,9 @@ jobs:
             sleep 1
           done
           status=0
-          for route in / /entities /contracts /subcontracts /customers /programs \
+          for route in / /upcoming /entities /contracts /subcontracts /customers /programs \
                        /dacis-contracts /taxonomy /watchlist /review /quality /acceptance \
-                       /healthz /api/overview /api/acceptance /api/quality \
+                       /healthz /api/overview /api/upcoming /api/acceptance /api/quality \
                        /app.css /fonts/Archivo-Regular.woff2; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$route")
             if [ "$code" != "200" ]; then

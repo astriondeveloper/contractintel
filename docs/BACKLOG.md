@@ -58,9 +58,23 @@ fails if the denominator is wrong.
 
 ---
 
-## 3. Recompete detection — spec section 9.1 — medium
+## 3. Recompete detection — spec section 9.1 — medium — **built**
 
-**Unblocks acceptance test 8.**
+**Acceptance test 8 passes.** `migrations/0019_signal_generation.sql`,
+`src/signals/recompete.ts`, `npm run signals`, and the `/upcoming` screen.
+
+The short-PIID trap below turned out to be sharper than it reads: the collision is on
+`contract_action`'s primary key, not only in a `group by`, so decision **D3** is what makes
+detection correct at all. `contract_group` keys on the vehicle as well as the PIID, and
+`contract_group_ambiguous` measures what is left. `docs/DECISIONS.md` **D13** and **D14**
+record the identity decision and the two assumptions.
+
+Still open from this item: the reconciliation in item 8 would let a subcontract position be
+matched on more than a PIID.
+
+The original entry follows, because the traps it names are still the traps.
+
+---
 
 The candidate set already exists: 636 contract actions fall in the 12-to-36-month window, and
 `dacis_contract.end_date` adds the DACIS side. `dacis_contract_lost_prime_won_sub` is the

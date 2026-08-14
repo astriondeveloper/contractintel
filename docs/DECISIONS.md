@@ -295,6 +295,66 @@ from the OSINT finding rather than being made safe by it, and two things stay tr
 
 ---
 
+## D13. A contract is identified by its vehicle and its PIID, not its PIID
+
+**Spec section 9.1** asks for a signal when a contract is inside the recompete window.
+`contract_action` holds transactions, so something has to say which transactions are the
+same award, and the obvious answer is wrong.
+
+**What forced it.** Agency 9700 PIID `0001` modification `0` carries 58 distinct payloads
+on the supplied corpus, and `0002` and `0003` are similar. Those are not 58 modifications
+of one contract. A task order PIID is assigned by the ordering office and is unique only
+inside the vehicle it was ordered against, so `0001` is the first task order under this
+IDV and also the first under every other one.
+
+**Decision.** `contract_group`, in migration 0019, keys on
+`(awarding_agency_code, coalesce(idv_piid, ''), piid)`. The awardee is deliberately not in
+the key: a novation moves a contract to another company, and keying on the awardee would
+split one contract in two and raise two recompete signals for one recompete. The incumbent
+is read from the most recently signed action instead.
+
+**The sharper edge, found while writing the tests.** `contract_action`'s own primary key is
+spec 7.2's natural key, and the vehicle is not in it either. Two task orders numbered
+`0001` under different IDVs collide on the primary key itself, not merely in a `group by`.
+The only column separating them is the transaction number, which the export leaves blank
+on every row.
+
+That makes **D3 load bearing for recompete detection** rather than merely tidy. The
+content-derived surrogate transaction number is what gives those task orders separate rows
+at all. Loaded with `--spec-transaction-key`, one overwrites the other and the signal
+appears on the wrong contract with nothing on screen to suggest anything is missing. When
+the export populates `Transaction #`, the same property holds for a better reason.
+
+**What remains a judgement call.** Where `idv_piid` is blank the key degenerates to
+`(agency, piid)`, which is right for a standalone award and is the residual risk.
+`contract_group_ambiguous` measures exactly that residue rather than assuming it away, in
+the same spirit as `fpds_collapse_summary`. On a corpus where
+`likely_unrelated_awards` is large, this decision needs revisiting before the signals are
+trusted.
+
+---
+
+## D14. Two assumptions in recompete detection, both recorded rather than buried
+
+Neither is measured. Both are stated here so they can be argued with.
+
+**Twelve months of solicitation lead.** `expected_solicitation_fy` is derived as the fiscal
+year twelve months before the contract ends. The figure comes from the window itself: spec
+section 9 opens the recompete window at twelve months out, which only makes sense if that
+is roughly when the follow-on is expected to appear. It is `SOLICITATION_LEAD_MONTHS` in
+`src/signals/recompete.ts`; every generated row is rewritten from source on each run, so
+changing it needs no migration. A measured lead time per agency would be better and is not
+available from the corpus.
+
+**A subcontract position is matched on PIID alone.** `subcontract_edge` carries a prime
+PIID but no awarding agency, so the test that decides whether Astrion subs on a contract
+can over-match on a short PIID in the same way the grouping can. It is used only to label
+`astrion_position`, never to create a signal that would not otherwise exist, so a false
+positive files a row under the wrong play rather than inventing an opportunity. Raising it
+to certainty needs the reconciliation in backlog item 8.
+
+---
+
 ## Open questions
 
 **Gate B — is the GovWin API available?** Owner: Gavin.

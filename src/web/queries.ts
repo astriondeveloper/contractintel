@@ -599,6 +599,120 @@ export function watchlist(): Promise<WatchlistRow[]> {
   );
 }
 
+/* ================================================================= signals */
+
+export interface UpcomingRow {
+  readonly pursuit_id: string;
+  readonly title: string;
+  readonly signal_class: string;
+  readonly related_piid: string | null;
+  readonly period_end_date: Date | null;
+  readonly expected_solicitation_fy: number | null;
+  readonly estimated_value: string | null;
+  readonly astrion_position: string | null;
+  readonly incumbent_entity_id: string | null;
+  readonly incumbent_name: string | null;
+  readonly incumbent_confidence: string | null;
+  readonly agency_code: string | null;
+  readonly agency_label: string | null;
+  readonly state: string;
+  readonly owner: string | null;
+}
+
+const UPCOMING_FILTER = `
+  p.signal_class = 'recompete_window'
+  and ($1 = '' or p.title ilike '%' || $1 || '%'
+               or p.related_piid ilike '%' || $1 || '%'
+               or p.agency_code ilike '%' || $1 || '%'
+               or e.canonical_name ilike '%' || $1 || '%')
+  and ($2 = '' or p.astrion_position = $2)`;
+
+export function upcomingSignals(
+  search: string,
+  position: string,
+  limit: number,
+  offset: number,
+): Promise<Page<UpcomingRow>> {
+  return paged<UpcomingRow>(
+    `select p.pursuit_id::text, p.title, p.signal_class, p.related_piid, p.period_end_date,
+            p.expected_solicitation_fy, p.estimated_value::text, p.astrion_position,
+            p.incumbent_entity_id::text, e.canonical_name as incumbent_name,
+            p.incumbent_confidence, p.agency_code, al.label as agency_label,
+            p.state, p.owner
+       from pursuit p
+       left join entity e on e.entity_id = p.incumbent_entity_id
+       left join code_label_current al
+              on al.code_type = 'agency' and al.code_value = p.agency_code
+      where ${UPCOMING_FILTER}
+      order by p.period_end_date asc nulls last, p.estimated_value desc nulls last, p.pursuit_id
+      limit $3 offset $4`,
+    `select count(*)::text as n
+       from pursuit p
+       left join entity e on e.entity_id = p.incumbent_entity_id
+      where ${UPCOMING_FILTER}`,
+    [search, position],
+    limit,
+    offset,
+  );
+}
+
+export interface UpcomingSummary {
+  readonly total: number;
+  readonly prime_incumbent: number;
+  readonly subcontractor: number;
+  readonly none: number;
+  readonly without_value: number;
+  readonly estimated_value: string | null;
+  readonly detected_at: Date | null;
+}
+
+export async function upcomingSummary(): Promise<UpcomingSummary> {
+  const [row] = await query<{
+    total: string;
+    prime_incumbent: string;
+    subcontractor: string;
+    none: string;
+    without_value: string;
+    estimated_value: string | null;
+    detected_at: Date | null;
+  }>(
+    `select count(*)::text                                                          as total,
+            count(*) filter (where astrion_position = 'prime_incumbent')::text      as prime_incumbent,
+            count(*) filter (where astrion_position = 'subcontractor')::text        as subcontractor,
+            count(*) filter (where astrion_position = 'none')::text                 as none,
+            count(*) filter (where estimated_value is null)::text                   as without_value,
+            sum(estimated_value)::text                                              as estimated_value,
+            max(generated_at)                                                       as detected_at
+       from pursuit
+      where signal_class = 'recompete_window'`,
+  );
+  return {
+    total: Number(row!.total),
+    prime_incumbent: Number(row!.prime_incumbent),
+    subcontractor: Number(row!.subcontractor),
+    none: Number(row!.none),
+    without_value: Number(row!.without_value),
+    estimated_value: row!.estimated_value,
+    detected_at: row!.detected_at,
+  };
+}
+
+export interface ThresholdRow {
+  readonly signal_class: string;
+  readonly min_strategic_fit: number;
+  readonly rhythm: string;
+  readonly horizon_months_from: number | null;
+  readonly horizon_months_to: number | null;
+}
+
+/** BD Ops owns these rows. Spec section 13. The interface reads them, never writes them. */
+export function signalThresholds(): Promise<ThresholdRow[]> {
+  return query<ThresholdRow>(
+    `select signal_class, min_strategic_fit, rhythm, horizon_months_from, horizon_months_to
+       from signal_class_threshold order by signal_class`,
+  );
+}
+
 /* ============================================================ review queue */
 
 export interface ReviewRow {

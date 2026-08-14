@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "web": "tsx src/web/server.ts",
     "web:dev": "tsx watch src/web/server.ts",
-    "demo": "tsx scripts/build-demo.ts"
+    "demo": "tsx scripts/build-demo.ts",
+    "signals": "tsx src/signals/run-signals.ts"
   },
   "dependencies": {
     "csv-parse": "^5.5.6",

@@ -9,18 +9,20 @@ variables.
 
 ## State
 
-The data foundation is built and verified against the real corpus, and there is a read-only
-interface over it. The scoring engine is not built.
+The data foundation is built and verified against the real corpus, recompete signals are
+detected from it, and there is a read-only interface over both. The scoring engine is not
+built, so signals are ordered by date and value rather than ranked.
 
 | | |
 |---|---|
-| Schema | 40 tables, 17 views, 18 migrations |
+| Schema | 40 tables, 19 views, 19 migrations |
 | Loaders | FPDS transactions, FPDS subcontract edges, DACIS customers, programs, contracts |
 | Loaded | 22,624 contract actions, 4,042 subcontract edges, 854 customers, 74 programs, 213 DACIS contracts |
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
-| Interface | Twelve read-only screens, server rendered, no client bundle |
-| Tests | 164, against a real PostgreSQL 16 |
-| Acceptance tests | 5 of 12 pass, 0 fail, 7 blocked, each naming what it waits for |
+| Signals | Recompete detection over the corpus, writing `pursuit` rows on a monthly rhythm |
+| Interface | Thirteen read-only screens, server rendered, no client bundle |
+| Tests | 177, against a real PostgreSQL 16 |
+| Acceptance tests | 6 of 12 pass, 0 fail, 6 blocked, each naming what it waits for |
 
 `npm run accept` prints the current state of all twelve. **Blocked** means a test names its
 dependency; a **FAIL** is a real problem and CI treats it as one.
@@ -67,6 +69,7 @@ button that quietly bypasses it.
 | Screen | What it answers |
 |---|---|
 | Overview | What is loaded, how it resolved, when each source last landed |
+| Upcoming | Contracts inside the recompete window, soonest first, with the position Astrion holds on each |
 | Entities | One row per resolved company; the detail screen lists every spelling it answers to |
 | Contract actions | The FPDS corpus, with the vendor string as filed beside the entity it resolved to |
 | Subcontracts | Prime-to-sub edges, and which side Astrion is on |
@@ -77,8 +80,28 @@ button that quietly bypasses it.
 | Data quality | The seven views that keep known source defects visible |
 | Acceptance | The twelve tests from spec section 18, run live |
 
-`/api/overview`, `/api/acceptance` and `/api/quality` return the same numbers as JSON, and
+`/api/overview`, `/api/upcoming`, `/api/acceptance` and `/api/quality` return the same numbers as JSON, and
 `/healthz` answers a container probe without touching the corpus.
+
+## Detecting signals
+
+```bash
+npm run signals -- --dry-run    # work it out, write nothing
+npm run signals                 # detect and write
+```
+
+Contracts ending inside the recompete window become `pursuit` rows, each carrying the
+position Astrion holds on it: prime incumbent, subcontractor, or none. Three different
+plays, and the `/upcoming` screen groups by that rather than ranking across it.
+
+The window is not a constant in the code. It lives in `signal_class_threshold`, which BD Ops
+owns per spec section 13, seeded at 12 to 36 months from spec section 9. `rhythm` on the same
+row says `monthly`, which is how often this should run; it is idempotent, so running it more
+often costs nothing but time.
+
+A generated pursuit carries a `signal_key` and a re-run updates it in place. `state`, `owner`
+and `campaign_id` belong to whoever is working the pursuit and are never overwritten, and a
+pursuit somebody created by hand is never touched at all.
 
 ## Loading a corpus
 
@@ -105,14 +128,15 @@ anything it does not recognise. Every loader is idempotent.
 |---|---|
 | `CIE_Build_Spec_v1.0.md` | The specification. It wins. |
 | `CIE_Phase1_Status.md` | What is built, what the corpus actually said, what is not done. **Not in this repository** — it records findings about real contracts, so it lives with the specification. |
-| `docs/DECISIONS.md` | Eleven decisions where this departs from the spec, each with the measurement that forced it. |
+| `docs/DECISIONS.md` | Fourteen decisions where this departs from the spec, each with the measurement that forced it. |
 | `docs/BACKLOG.md` | Remaining phases, in dependency order, sized, with the traps in each. |
 | `docs/DEPLOY.md` | Running the interface locally, and putting it on Azure Container Apps. |
 | `docs/GITHUB_SETUP.md` | One-time checklist for putting this on GitHub. |
 | `CONTRIBUTING.md` | Local setup and the things that will trip you up. |
 
 Migration headers explain the defect or decision behind each one. **0014**, **0015** and
-**0017** are worth reading before touching the loaders.
+**0017** are worth reading before touching the loaders, and **0019** before touching the
+signals: it explains why a PIID does not identify a contract.
 
 ## Three things to know before changing anything
 

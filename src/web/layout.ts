@@ -18,6 +18,7 @@ export interface NavItem {
  */
 export const NAV: readonly NavItem[] = [
   { href: '/', label: 'Overview' },
+  { href: '/upcoming', label: 'Upcoming' },
   { href: '/entities', label: 'Entities' },
   { href: '/contracts', label: 'Contract actions' },
   { href: '/subcontracts', label: 'Subcontracts' },
