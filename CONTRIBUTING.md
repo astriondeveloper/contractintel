@@ -69,6 +69,11 @@ src/web/html.ts         escaping. Everything interpolated is escaped unless it c
 src/web/public/         app.css, the Archivo weights, the logo
 ```
 
+`npm run demo -- --out dist/demo.html` renders the whole interface to one self-contained HTML
+file for review, using the same page functions the server calls. It embeds every row it
+renders, so build it against a synthetic corpus unless you mean to hand someone the real one.
+`docs/DEPLOY.md` has the detail.
+
 Three rules, each load bearing:
 
 **It is read only, and the router enforces it.** Anything other than `GET` or `HEAD` gets a

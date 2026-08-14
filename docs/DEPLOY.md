@@ -165,11 +165,37 @@ nothing.
 is not. It does not depend on a corpus being loaded, so it is a correct readiness probe on a
 fresh deployment. The `Dockerfile` declares a `HEALTHCHECK` against it.
 
+## A snapshot you can send someone
+
+Deploying needs a database and a container. Neither is a reasonable thing to ask of someone
+who wants to look at a screen and tell you what is wrong with it, so there is a third thing
+between running it locally and deploying it:
+
+```bash
+npm run demo -- --out dist/demo.html
+```
+
+One HTML file, no server, no network, no database. It opens anywhere, carries every screen
+including the entity detail ones, and the search boxes filter the exported rows in the page.
+The stylesheet and all four Archivo weights are inlined, so it renders in Archivo rather than
+falling back to Arial on a machine that has never seen the repository.
+
+There is no second implementation behind it. Each screen is rendered by the same function the
+server calls, so a screen that changes changes in the snapshot too.
+
+Two things it is not, and it says both on the page: nothing in it is live, and each list
+carries its first page of rows rather than all of them.
+
+**Build it from a synthetic corpus unless you mean to hand someone the real one.** The file
+embeds every row it renders. Point `DATABASE_URL` at a database seeded from `tests/seed` and
+the companies in the output are invented; point it at the real corpus and the file is the
+corpus.
+
 ## What is deliberately not here
 
-**No static hosting.** Every screen is a live query against the database. There is nothing
-to publish to a static host, and a snapshot of the corpus committed to a repository would be
-wrong the day after it was taken.
+**No static hosting of the live system.** Every screen is a live query against the database.
+The snapshot above is for review and is stamped with the time it was built; a corpus
+committed to a repository or pushed to a host would be wrong the day after it was taken.
 
 **No data in the image.** `docs/DECISIONS.md` D11 keeps the seed files out of the repository
 and out of the image, and D12 leaves that unchanged for a reason that survives the OSINT
