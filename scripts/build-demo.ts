@@ -25,7 +25,14 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { closePool } from '../src/db/index.js';
-import { databaseState, entities, feed, forecastItems, watermarkFor } from '../src/web/queries.js';
+import {
+  campaigns,
+  databaseState,
+  entities,
+  feed,
+  forecastItems,
+  watermarkFor,
+} from '../src/web/queries.js';
 import type { Ctx } from '../src/web/shell.js';
 import { escape } from '../src/web/html.js';
 import { NAV } from '../src/web/layout.js';
@@ -36,6 +43,7 @@ import { feedScreen } from '../src/web/pages/feed.js';
 import { forecast, forecastDetail } from '../src/web/pages/forecast.js';
 import { handoffs } from '../src/web/pages/handoffs.js';
 import { requirement } from '../src/web/pages/requirement.js';
+import { campaignDetail, campaignsScreen } from '../src/web/pages/campaigns.js';
 import { entityDetail, entityList } from '../src/web/pages/entities.js';
 import { contracts } from '../src/web/pages/contracts.js';
 import { subcontracts } from '../src/web/pages/subcontracts.js';
@@ -63,6 +71,7 @@ const SCREENS: readonly Screen[] = [
   { key: 'feed', label: 'Feed', path: '/feed', render: feedScreen },
   { key: 'forecast', label: 'Forecast', path: '/forecast', render: forecast },
   { key: 'handoffs', label: 'Hand-offs', path: '/handoffs', render: handoffs },
+  { key: 'campaigns', label: 'Campaigns', path: '/campaigns', render: campaignsScreen },
   // Follows belongs to a person and a snapshot has no signed-in person, so it is not carried.
   // The rail link falls back to the feed, which is where a follow would take effect.
   { key: 'overview', label: 'Corpus overview', path: '/overview', render: overview },
@@ -115,6 +124,7 @@ function rewriteLinks(
   renderedEntities: ReadonlySet<string>,
   renderedRequirements: ReadonlySet<string>,
   renderedForecasts: ReadonlySet<string>,
+  renderedCampaigns: ReadonlySet<string>,
 ): string {
   return html.replace(/href="\/([^"]*)"/g, (_match, rest: string) => {
     const [pathname = ''] = rest.split('?');
@@ -129,6 +139,12 @@ function rewriteLinks(
     if (requirementLink) {
       const id = requirementLink[1]!;
       return renderedRequirements.has(id) ? `href="#requirement-${id}"` : 'href="#feed"';
+    }
+
+    const campaignLink = /^campaigns\/(\d+)$/.exec(pathname);
+    if (campaignLink) {
+      const id = campaignLink[1]!;
+      return renderedCampaigns.has(id) ? `href="#campaign-${id}"` : 'href="#campaigns"';
     }
 
     const forecastLink = /^forecast\/(\d+)$/.exec(pathname);
@@ -195,6 +211,10 @@ async function main(): Promise<void> {
   const topForecasts = await forecastItems('', 'everything', null, null, '', FORECAST_DETAILS, 0);
   const renderedForecasts = new Set<string>(topForecasts.rows.map((row) => row.forecast_id));
 
+  // Every campaign, because there are never many and each one carries the caveats behind its figures.
+  const allCampaigns = await campaigns();
+  const renderedCampaigns = new Set<string>(allCampaigns.map((row) => row.campaign_id));
+
   process.stdout.write('Rendering screens\n');
 
   const bodies: { key: string; label: string | null; html: string }[] = [];
@@ -206,7 +226,7 @@ async function main(): Promise<void> {
       key: screen.key,
       label: screen.label,
       html: stripDeadControls(
-        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts, renderedCampaigns),
       ),
     });
     process.stdout.write(`  ${screen.path}\n`);
@@ -220,7 +240,7 @@ async function main(): Promise<void> {
       key: `entity-${row.entity_id}`,
       label: null,
       html: stripDeadControls(
-        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts, renderedCampaigns),
       ),
     });
   }
@@ -234,7 +254,7 @@ async function main(): Promise<void> {
       key: `requirement-${row.pursuit_id}`,
       label: null,
       html: stripDeadControls(
-        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts, renderedCampaigns),
       ),
     });
   }
@@ -248,11 +268,25 @@ async function main(): Promise<void> {
       key: `forecast-${row.forecast_id}`,
       label: null,
       html: stripDeadControls(
-        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts, renderedCampaigns),
       ),
     });
   }
   process.stdout.write(`  ${topForecasts.rows.length} projection screen(s)\n`);
+
+  for (const row of allCampaigns) {
+    const ctx: Ctx = { url: new URL(`http://demo/campaigns/${row.campaign_id}`), state, user: null };
+    const rendered = await campaignDetail(ctx, row.campaign_id);
+    if (rendered === null) continue;
+    bodies.push({
+      key: `campaign-${row.campaign_id}`,
+      label: null,
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts, renderedCampaigns),
+      ),
+    });
+  }
+  process.stdout.write(`  ${allCampaigns.length} campaign screen(s)\n`);
 
   // The stylesheet, with the fonts inlined. A published page cannot reach a font CDN and
   // a silent fallback to Arial would break the thing acceptance test 12 is about.
@@ -266,7 +300,9 @@ async function main(): Promise<void> {
 
   const built = new Date().toISOString().slice(0, 16).replace('T', ' ');
 
-  const document = `<title>Contract Intelligence Engine</title>
+  // Named for the product rather than the repository. This file gets shared and sits in a list
+  // beside other people's, where "Contract Intelligence Engine" says nothing about whose it is.
+  const document = `<title>Astrion Contract Intelligence</title>
 <meta name="robots" content="noindex, nofollow">
 <style>
 ${css}
@@ -320,6 +356,7 @@ ${group.items.map((item) => `      <a href="#${keyFor(item.href)}" data-nav="${k
 ).join('\n')}
     <div class="rail-foot">
       <div class="slogan">Defend This World. Build the Next.</div>
+      <div class="credit">Created by Gavin Taylor</div>
       <div>Static snapshot, built ${built} UTC</div>
     </div>
   </nav>
@@ -328,6 +365,7 @@ ${group.items.map((item) => `      <a href="#${keyFor(item.href)}" data-nav="${k
     <div class="demo-banner">
       <div class="demo-banner-inner">
         <strong>Static snapshot</strong>
+        <span>Astrion Contract Intelligence, created by Gavin Taylor.</span>
         <span>Built ${built} UTC from a synthetic corpus. Every company here is invented.</span>
         <span>Nothing is live: search filters the exported rows, and no action can be taken.</span>
       </div>
@@ -359,6 +397,7 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
     var navKey = key.indexOf('entity-') === 0 ? 'entities'
       : key.indexOf('requirement-') === 0 ? 'feed'
       : key.indexOf('forecast-') === 0 ? 'forecast'
+      : key.indexOf('campaign-') === 0 ? 'campaigns'
       : key;
     navLinks.forEach(function (link) {
       link.classList.toggle('current', link.getAttribute('data-nav') === navKey);

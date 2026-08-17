@@ -159,6 +159,77 @@ Mount the share the scheduled export writes into at `/app/data/drops`. Every loa
 idempotent, so a job that runs against an unchanged folder reports zero new and writes
 nothing.
 
+### The other scheduled jobs, and why a deployment without them looks broken
+
+The load fills the corpus. It does not fill the feed, the forecast or the score, and a
+deployment that ran only the migration and the load would sit there with every screen
+correctly explaining that it is empty. That is the most likely way this goes live and gets
+written off, so the jobs are listed here with the rhythm each one actually wants.
+
+| Job | Command | Rhythm | What it fills |
+|---|---|---|---|
+| Targeting profile | `npm run profile` | after each corpus load | The NAICS and PSC codes the SAM.gov search asks for |
+| SAM.gov notices | `npm run load:sam` | daily | The feed's open solicitations and sources sought |
+| Recompete detection | `npm run signals` | monthly | The feed's recompetes |
+| Scoring | `npm run score` | after each of the above | Every requirement's band and rule trace |
+| Forecast | `npm run forecast` | weekly | The quarterly projection |
+| Campaign sizing | `npm run size -- --actor <principal>` | monthly | TAM, SAM, SOM and the capture rate |
+| Digest | `npm run digest` | weekly, once wired to a relay | Renders per person; sends nothing yet |
+
+The rhythms are not invented here. `signal_class_threshold.rhythm` carries one per signal
+class and BD Ops owns that row, so the cron and the database should agree; if they drift, the
+database is right and the cron is stale.
+
+One job per line, same shape as the load:
+
+```bash
+for spec in "sam:0 7 * * *:run,load:sam" \
+            "signals:0 3 1 * *:run,signals" \
+            "score:30 7 * * *:run,score" \
+            "forecast:0 4 * * 1:run,forecast"; do
+  name="${spec%%:*}"; rest="${spec#*:}"; cron="${rest%%:*}"; args="${rest##*:}"
+  az containerapp job create \
+    --name "cie-$name" --resource-group cie --environment cie-env \
+    --image <registry>.azurecr.io/cie:latest \
+    --trigger-type Schedule --cron-expression "$cron" \
+    --secrets db-url="..." sam-key="..." \
+    --env-vars DATABASE_URL=secretref:db-url PGSSLMODE=require SAM_API_KEY=secretref:sam-key \
+    --command "npm" --args "$args"
+done
+```
+
+`SAM_API_KEY` is a Container Apps secret and a secret only. It is read from the environment,
+never written to the database, and a test asserts it never reaches an archived payload. The
+key comes from api.data.gov and has to be registered for the Opportunities API specifically;
+a key that works against another api.data.gov endpoint returns 403 here.
+
+**Check it landed rather than assuming it did.** `npm run readiness` prints what the corpus
+can and cannot support, and it is the one command to run after the first full cycle:
+
+```bash
+az containerapp job start --name cie-readiness --resource-group cie \
+  --command "npm" --args "run,readiness"
+```
+
+It flags the things that are the honest state of a shallow corpus rather than defects, so a
+run full of `!` on day one is expected. The figure to watch across the first month is how many
+projections rest on a measurement rather than on the 365-day assumption: that number climbs on
+its own as SAM.gov history accrues, with no code change.
+
+### Developing against SAM.gov without a key
+
+`npm run sam:stub` serves the v2 endpoint's shape on port 3999, with invented notices:
+
+```bash
+npm run sam:stub
+SAM_API_BASE=http://localhost:3999/opportunities/v2/search \
+  SAM_API_KEY=stub npm run load:sam
+```
+
+It answers 401 without a key and 400 without the posted range, because the real endpoint
+does, and the tests inject the fetch function rather than using it — so this is the only thing
+that exercises the actual HTTP path, the parameter shape and the pagination.
+
 ### Health probes
 
 `/healthz` returns 200 with `{"status":"ok"}` when the database is reachable and 503 when it

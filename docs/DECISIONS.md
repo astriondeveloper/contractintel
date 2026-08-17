@@ -644,6 +644,121 @@ name carrying an accent arrives as mojibake.
 
 ---
 
+## D22. TAM from this corpus is a floor, and saying so is the whole decision
+
+**Spec section 11** asks for TAM, SAM and SOM per campaign. TAM is the total addressable market:
+every dollar every agency spent on this kind of work.
+
+**That is not in this corpus and is not derivable from it.** What is loaded is Astrion's own history
+plus the competitors on the watchlist, which is a targeted extract rather than the federal market.
+Summing obligations under a campaign's codes and labelling the result TAM would produce a number
+that is wrong by an unknown multiple, looks entirely plausible, and would be quoted in a review
+within a week. It is the single most damaging figure this system could emit.
+
+**Decision.** Compute it, label it a floor, and make the label impossible to lose.
+
+- Every sized campaign carries a `corpus_is_not_the_market` row in `campaign_sizing_evidence` with
+  `supports = false`. It is written on every run and cannot be turned off.
+- `/campaigns` states it above the figures rather than in a footnote, and the campaign detail screen
+  shows caveats before it shows arithmetic.
+- `npm run size` prints it under every campaign, and `/api/campaigns` carries it as a named field so
+  a reader of the JSON cannot miss what a reader of the screen is told.
+
+**SAM is the sounder figure and the screens say that too.** A campaign that names its offices has
+stated where it competes, so restricting the same obligations to those offices is a claim the corpus
+can actually support. **A campaign that names no offices gets no SAM at all** — null, with a caveat
+naming what is missing — rather than falling back to TAM. Falling back would report an addressable
+figure under a served label, which is the kind of substitution nobody catches.
+
+**The capture rate is measured, and it never travels without its sample size.** Astrion's share of
+the served market's obligations, with the count of awards behind it, and a standing in words rather
+than a threshold: *too few awards to be a rate* below ten, *thin* below forty. Spec 11.2 asks for the
+sample size beside the rate and acceptance test 9 now asserts it against `campaign_summary`, which is
+the view both the screen and the CLI read — asserting it against the table would pass on a build
+whose screen had quietly dropped it.
+
+**One arithmetic trap worth recording.** An award matching several of a campaign's codes must count
+once. Joining `campaign_code` rather than testing it with an `exists` multiplies the obligation by
+the number of matching codes, and the result stays a plausible-looking number. `cie_campaign_market`
+uses `exists`, and a test asserts the exact figure rather than that it is greater than zero.
+
+**Campaigns are defined at a command line, not in the interface.** `signal_class_threshold` and
+`opportunity_profile` are both BD Ops data managed that way already, and a campaign definition
+belongs with them: it is the shape of the market rather than something anybody works day to day.
+It also keeps the write surface at the three endpoints the router allows. `--actor` is required on
+anything that writes, because there is no signed-in user at a command line and an audit trail full
+of "system" is worse than none.
+
+---
+
+## D23. The digest is rendered and not sent, and the read mark is why
+
+**The spec put email and Teams out of scope, and in-app first was right.** A notification nobody
+asked for trains people to ignore notifications.
+
+**But nothing here reaches anybody until they sign in.** With 20-odd people checking occasionally
+that is the main risk to the whole system being used, and it is a risk no amount of work on the feed
+addresses. The feed can be perfect and unread.
+
+**Decision.** Build the part that is hard and stop at the part that is easy. `npm run digest`
+renders per person, in text and HTML, and sends nothing. What is left is a transport against
+`subject`, `text` and `html`, which is a dozen lines for whoever owns the relay, written against a
+shape they can already read rather than one they have to guess at.
+
+Four rules, each from a way a digest fails, and each now a test:
+
+**It is per person.** `/api/feed` is scoped to nobody deliberately, because an unauthenticated
+endpoint returning one person's patch would be an authorisation bug. The digest reads each
+principal's own follows, so what somebody receives is what their own feed would show them.
+
+**Nothing goes out when there is nothing.** Most weeks in most patches are quiet. `render` returns
+null rather than a cheerful nothing, and `renderAll` omits those people entirely, so an empty result
+means send no mail rather than send empty mail.
+
+**The subject line carries the content.** "3 new in your patch: 2 recompetes and 1 sources sought at
+EXAMPLE RANGE OPERATIONS" is read; "Your weekly digest" is not. It is assembled from what is
+actually in the digest, names one office where one dominates and counts them where the work is
+spread, and reports the true total rather than the length of the list it was handed.
+
+**It never moves the read mark.** This is the one that would do real damage. A digest is a copy of
+the feed, not a visit to it, and advancing `feed_watermark` because an email was generated would
+empty the screen the person opened the email to read.
+
+**A fifth rule turned up while building it.** Somebody who follows nothing gets no digest at all.
+There is nothing personal to send them, and the right nudge for that person is a colleague rather
+than mail from a system they have not finished setting up.
+
+**The HTML is inline-styled on a light ground**, which is not a preference. A mail client is not a
+browser: it strips a stylesheet and ignores a class. And a dark email in a light inbox reads as a
+phishing attempt, so the interface's dark ground does not follow it out of the building.
+
+---
+
+## D24. The stub is committed, because the HTTP path was the one thing nothing exercised
+
+`CONTRIBUTING.md` had always said to point `SAM_API_BASE` at a local stub, and left the stub as an
+exercise. That instruction was worse than useless: the tests inject `fetchPage`, so `httpFetch` —
+the one function that actually talks to SAM.gov — was the one function nothing ran.
+
+**Decision.** `npm run sam:stub` is committed and serves the v2 endpoint's shape, including the
+parts a lenient stub would hide:
+
+- 401 without an `api_key`, as api.data.gov answers
+- 400 without `postedFrom`/`postedTo`, which the v2 definition requires whenever `limit` is given,
+  and 400 on a date that is not `mm/dd/yyyy`
+- real pagination, so `offset` and `totalRecords` are exercised rather than assumed
+
+Its notices are deliberately awkward: one title begins with `=`, which Excel executes as a formula
+on CSV export; one carries no response deadline, as a sources sought often does not; one is a notice
+type the loader does not recognise, so the skip-and-count path runs. Every identifier is
+`ZSTUB`-prefixed so none can be mistaken for a real solicitation.
+
+Running the real loader against it confirmed the whole chain end to end — parameters, pagination,
+classification, idempotence on a second run, and that the API key never reaches an archived payload.
+The only untested thing left is a real key.
+
+---
+
 ## Open questions
 
 **Gate B — is the GovWin API available?** Owner: Gavin.

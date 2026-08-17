@@ -45,6 +45,7 @@ import { feedScreen, feedJson } from './pages/feed.js';
 import { follows } from './pages/follows.js';
 import { forecast, forecastDetail, forecastJson } from './pages/forecast.js';
 import { handoffs, handoffsJson } from './pages/handoffs.js';
+import { campaignDetail, campaignsJson, campaignsScreen } from './pages/campaigns.js';
 import { requirement, requirementFields } from './pages/requirement.js';
 import { overview, overviewJson } from './pages/overview.js';
 import { entityDetail, entityList } from './pages/entities.js';
@@ -105,6 +106,7 @@ const ROUTES: Record<string, Handler> = {
   '/follows': follows,
   '/forecast': forecast,
   '/handoffs': handoffs,
+  '/campaigns': campaignsScreen,
   // Kept and unlisted. The corpus overview answers "what is loaded", which is a question for
   // whoever maintains the system rather than the first thing BD should see.
   '/overview': overview,
@@ -138,6 +140,7 @@ const JSON_ROUTES: Record<string, () => Promise<unknown>> = {
   '/api/feed': feedJson,
   '/api/forecast': forecastJson,
   '/api/handoffs': handoffsJson,
+  '/api/campaigns': campaignsJson,
   '/api/overview': overviewJson,
   '/api/acceptance': acceptanceJson,
   '/api/quality': qualityJson,
@@ -391,6 +394,22 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   if (pursuitMatch) {
     response.writeHead(301, { location: `/requirements/${pursuitMatch[1]}` });
     response.end();
+    return;
+  }
+
+  // /campaigns/<id>
+  const campaignMatch = /^\/campaigns\/(\d{1,19})$/.exec(pathname);
+  if (campaignMatch) {
+    const body = await campaignDetail(ctx, campaignMatch[1]!);
+    if (body === null) {
+      response.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(
+        errorPage(pathname, 404, 'No such campaign', `Campaign ${campaignMatch[1]} is not in this database.`),
+      );
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(request.method === 'HEAD' ? undefined : body);
     return;
   }
 

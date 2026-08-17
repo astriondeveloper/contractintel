@@ -115,6 +115,13 @@ jobs:
           npm run forecast:backtest -- --as-of 2022-10-01
           # Twice, because the forecast is a derived table and a second run must change nothing.
           npm run forecast
+          # Campaign sizing, the digest and the readiness report all have to survive an empty
+          # corpus too. The digest in particular must print "nothing to send" rather than fail.
+          npm run campaign
+          npm run campaign -- --gap
+          npm run size -- --actor ci@example.invalid
+          npm run digest
+          npm run readiness
 
       # Acceptance tests are expected to report blocked items until the remaining phases
       # exist. A FAIL is what must not happen, so that is what is checked.
@@ -144,8 +151,9 @@ jobs:
                        '/forecast?scope=everything&confidence=high' /handoffs \
                        /overview /entities /contracts /subcontracts /customers \
                        /programs /dacis-contracts /taxonomy /watchlist /review /quality \
-                       /acceptance /healthz /api/dashboard /api/feed /api/forecast \
-                       /api/handoffs /api/overview /api/acceptance /api/quality \
+                       /campaigns /acceptance /healthz /api/dashboard /api/feed \
+                       /api/forecast /api/handoffs /api/campaigns /api/overview \
+                       /api/acceptance /api/quality \
                        /app.css /fonts/Archivo-Regular.woff2; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$route")
             if [ "$code" != "200" ]; then

@@ -38,6 +38,12 @@ export const NAV: readonly NavGroup[] = [
     ],
   },
   {
+    label: 'Market',
+    items: [
+      { href: '/campaigns', label: 'Campaigns', glyph: '◪' },
+    ],
+  },
+  {
     label: 'Intelligence',
     items: [
       { href: '/entities', label: 'Companies', glyph: '⬡' },
@@ -133,6 +139,7 @@ export function page(options: PageOptions): string {
     )}
     <div class="rail-foot">
       <div class="slogan">Defend This World. Build the Next.</div>
+      <div class="credit">Created by Gavin Taylor</div>
       <div>Built to <code>CIE_Build_Spec_v1.0</code></div>
     </div>
   </nav>

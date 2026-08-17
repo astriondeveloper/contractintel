@@ -109,9 +109,23 @@ ending 2026-09-30.
 
 ---
 
-## 4. Campaign sizing and the gap report — spec section 11 — medium
+## 4. Campaign sizing and the gap report — spec section 11 — medium — **built**
 
-**Unblocks acceptance tests 9 and 10.**
+**Acceptance tests 9 and 10 pass, so all twelve now do.** `migrations/0024_campaign_sizing.sql`,
+`src/campaign/`, `npm run campaign`, `npm run size`, and the `/campaigns` screen.
+
+`docs/DECISIONS.md` **D22** records the one thing that mattered: TAM computed from this corpus is a
+floor, not a total addressable market, because the corpus is Astrion plus the watchlist rather than
+the federal market. It is stored as evidence on every campaign and cannot be turned off. SAM is the
+sounder figure and a campaign that names no offices gets none rather than a quiet fallback to TAM.
+
+Still open from this item: the `participant_list_truncated` warning below. Sizing runs off FPDS
+obligations rather than program participant lists, so the cap does not currently bite — but any
+future SAM computed from a participant list has to say when the list was truncated.
+
+The original entry follows, because the traps it names are still the traps.
+
+---
 
 `campaign`, `campaign_node`, `campaign_office` and `pursuit` exist, including
 `capture_rate_sample_size`, which acceptance test 9 requires to be displayed beside the
@@ -221,18 +235,29 @@ something other than `default`, and a sweep in which the bands separate.
 
 ---
 
-## 9. The digest — small, and the highest-value thing left
+## 9. The digest — small — **rendered, not sent**
 
-**Explicitly out of scope for this build**, and worth writing down as the next thing rather than as
-a closed question.
+**The render is built. `npm run digest` produces it per person, in text and HTML, and sends nothing.**
+`src/digest/`, and `tests/digest.test.ts` pins every trap below.
 
-In-app only was the right call: a notification nobody asked for trains people to ignore
-notifications. But nothing here reaches anybody until they sign in, and with 20-odd people checking
-occasionally that is the main risk to any of it being used. The feed can be perfect and unread.
+What remains is a transport and a schedule, and it is deliberately left: the hard part of a digest is
+what it says, and SMTP against `digest.subject`, `digest.text` and `digest.html` is a dozen lines for
+whoever owns the mail relay. `docs/DEPLOY.md` has the Container Apps job.
 
-What exists already: `/api/feed`, `/api/forecast` and `/api/handoffs` return the same numbers the
-screens do, and `feed_watermark` knows what each person has and has not seen. What is missing is a
-per-person render and a delivery path.
+The traps below were the point of the item and each is now a test:
+
+- per person, not global — two people with different follows get different mail
+- nothing sent when nothing is new — `renderAll` omits them rather than returning empties
+- the subject line carries the content — asserted against the exact string
+- the read mark never moves — asserted before and after a render
+
+One more turned up while building it: **a person who follows nothing gets no digest.** There is
+nothing personal to send them, and the right nudge is a colleague rather than mail from a system they
+have not set up.
+
+The original entry follows, because the reasoning still holds.
+
+---
 
 **Watch out for:**
 

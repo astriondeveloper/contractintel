@@ -1,5 +1,7 @@
 # Contract Intelligence + Integration Engine
 
+**Created by Gavin Taylor.**
+
 Phase 1 implementation of `CIE_Build_Spec_v1.0.md`. The specification is the controlling
 document; where this build departs from it, `docs/DECISIONS.md` says so and why.
 
@@ -30,24 +32,25 @@ projects what is coming, and the interface is a personal feed over all of it.
 
 | | |
 |---|---|
-| Schema | 51 tables, 33 views, 23 migrations |
+| Schema | 52 tables, 36 views, 24 migrations |
 | Follows | Capability areas, agencies and offices, companies, and raw NAICS, PSC or keyword |
 | Scoring | 8 weighted factors, 5 hard gates, an evidence row per claim |
 | Forecast | Contract ends and vehicle expiries, per-office lead times, an evidence row per fact, backtestable |
 | Loaders | FPDS transactions, FPDS subcontract edges, DACIS customers, programs, contracts, SAM.gov notices |
 | Loaded | 22,624 contract actions, 4,042 subcontract edges, 854 customers, 74 programs, 213 DACIS contracts |
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
-| Interface | Seventeen screens, server rendered, no client bundle, three write endpoints |
-| Tests | 315, against a real PostgreSQL 16 |
-| Acceptance tests | 10 of 12 pass, 0 fail, 2 blocked, both on campaign sizing |
+| Interface | Nineteen screens, server rendered, no client bundle, three write endpoints |
+| Tests | 368, against a real PostgreSQL 16 |
+| Market sizing | TAM, SAM and SOM per campaign, with an observed capture rate and its sample size |
+| Acceptance tests | **12 of 12 pass**, 0 fail, 0 blocked |
 
 `npm run accept` prints the current state of all twelve. **Blocked** means a test names its
 dependency; a **FAIL** is a real problem and CI treats it as one.
 
-Six of the twelve read the corpus, so on a fresh clone they report blocked rather than passing
-and the count is 4 of 12. That is the honest reading of an empty database and not a regression:
-load a corpus and they run. The two that stay blocked either way are 9 and 10, which need
-campaign sizing — `docs/BACKLOG.md` item 4.
+Eight of the twelve read the corpus or need a campaign, so on a fresh clone they report blocked
+rather than passing and the count is 4 of 12. That is the honest reading of an empty database and
+not a regression: load a corpus, define a campaign, run the jobs, and all twelve run.
+`npm run readiness` says which of those is missing.
 
 ## Start here
 
@@ -100,6 +103,7 @@ ingress and the fact that the interface has no authentication.
 | Review queue | Everything the resolver refused to decide alone |
 | Data quality | The seven views that keep known source defects visible |
 | Acceptance | The twelve tests from spec section 18, run live |
+| Campaigns | TAM, SAM and SOM per capability area, and the gap report of what no campaign claims |
 | Overview | What is loaded, how it resolved, when each source last landed. Unlisted in the rail |
 
 ### Writing
@@ -123,9 +127,9 @@ of the container. With `CIE_AUTH_MODE` unset the interface is entirely readable 
 refused with the reason, which is the secure default: a misconfigured deployment should lose the
 ability to write rather than gain the ability to impersonate. `docs/DEPLOY.md` has the commands.
 
-`/api/dashboard`, `/api/feed`, `/api/forecast`, `/api/handoffs`, `/api/overview`, `/api/acceptance`
-and `/api/quality` return the same numbers as JSON, and `/healthz` answers a container probe without
-touching the corpus.
+`/api/dashboard`, `/api/feed`, `/api/forecast`, `/api/handoffs`, `/api/campaigns`, `/api/overview`,
+`/api/acceptance` and `/api/quality` return the same numbers as JSON, and `/healthz` answers a
+container probe without touching the corpus.
 
 `/pipeline`, `/my-work`, `/upcoming` and `/pursuits/<id>` redirect: they were the ownership model
 this build replaced, and a bookmark should not 404. `docs/DECISIONS.md` **D17** says why the model
@@ -196,6 +200,62 @@ four shapes of it: a field block that selects on click, a written summary paragr
 link, and a CSV export that takes a multi-select from the feed. Codes carry their labels, absent
 values say `not recorded` rather than leaving a gap, and no absent value is ever a zero.
 `docs/DECISIONS.md` **D21**.
+
+## Market sizing
+
+```bash
+npm run campaign -- --create "Flight test" --nodes CAP-01,CAP-03 \
+                    --offices 9700/FA8601 --actor <you>
+npm run size -- --actor <you>
+npm run campaign -- --gap
+```
+
+A campaign is a set of capability areas plus the offices that buy them. Sizing gives three figures
+and a rate, all derived from the corpus and none aspirational:
+
+| | |
+|---|---|
+| **TAM** | Obligations under the campaign's codes, any office, over the window |
+| **SAM** | The same, restricted to the offices the campaign says it competes in |
+| **SOM** | SAM times the capture rate Astrion has actually achieved in that slice |
+
+**TAM is a floor and every screen says so.** This corpus is Astrion's history plus the watchlist
+competitors, not every federal dollar under these codes, and the difference is not derivable from
+what is here. The caveat is stored as evidence on every campaign and cannot be turned off, because
+it is the most quotable wrong number the system could produce.
+
+**The capture rate is measured and never travels without its sample size.** Spec 11.2, and the
+reason is that a 12 percent rate over four awards and the same rate over four hundred are different
+claims. A campaign that names no offices gets no SAM at all rather than a quiet fallback to TAM.
+
+The **gap report** lists requirements no campaign claims, with the campaign whose codes they match,
+so a gap is something to act on rather than merely count.
+
+## The digest
+
+```bash
+npm run digest                                  # every digest worth sending
+npm run digest -- --person <principal> --html
+npm run digest -- --out dist/digests --base-url https://…
+```
+
+Renders and stops. Nothing sends yet, and that is the state to ship in rather than a gap: the hard
+part of a digest is what it says, and a transport is a dozen lines against a shape somebody can
+already read. `docs/BACKLOG.md` item 9 has the traps.
+
+It is per person, it sends nothing when there is nothing, the subject line carries the content, and
+it never moves the read mark — a digest is a copy of the feed, not a visit to it.
+
+## Is any of this working yet
+
+```bash
+npm run readiness
+```
+
+Prints what the loaded corpus can and cannot support, and names the command that moves each number.
+Every screen here is honest about its own weak spots individually; this is the assembly of those
+admissions, because "should I believe this yet" is asked of the whole thing rather than of one
+screen. A run full of `!` on a shallow corpus is the expected state, not a defect.
 
 ## Detecting signals
 
@@ -296,7 +356,7 @@ anything it does not recognise. Every loader is idempotent.
 |---|---|
 | `CIE_Build_Spec_v1.0.md` | The specification. It wins. |
 | `CIE_Phase1_Status.md` | What is built, what the corpus actually said, what is not done. **Not in this repository** — it records findings about real contracts, so it lives with the specification. |
-| `docs/DECISIONS.md` | Twenty-one decisions where this departs from the spec, each with the measurement that forced it. |
+| `docs/DECISIONS.md` | Twenty-four decisions where this departs from the spec, each with the measurement that forced it. |
 | `docs/BACKLOG.md` | Remaining phases, in dependency order, sized, with the traps in each. |
 | `docs/DEPLOY.md` | Running the interface locally, and putting it on Azure Container Apps. |
 | `docs/GITHUB_SETUP.md` | One-time checklist for putting this on GitHub. |

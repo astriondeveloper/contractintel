@@ -270,6 +270,14 @@ code,
   margin-bottom: 4px;
 }
 
+/* Attribution. Quieter than the slogan and above the build reference, because it is a fact about
+   the tool rather than a claim on the screen. */
+.rail-foot .credit {
+  color: var(--silver);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
 /* ------------------------------------------------------------------ topbar */
 
 .surface {

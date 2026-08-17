@@ -1815,6 +1815,164 @@ export function handoffByWeek(weeks = 12): Promise<{ week_starting: Date; n: num
   );
 }
 
+/* ================================================================ campaigns */
+
+export interface CampaignRow {
+  readonly campaign_id: string;
+  readonly campaign_name: string;
+  readonly owner: string | null;
+  readonly business_unit: string | null;
+  readonly state: string;
+  readonly tam_usd: string | null;
+  readonly sam_usd: string | null;
+  readonly som_usd: string | null;
+  readonly capture_rate: string | null;
+  readonly capture_rate_sample_size: number | null;
+  readonly capture_rate_standing: string;
+  readonly sizing_fy_from: number | null;
+  readonly sizing_fy_to: number | null;
+  readonly sizing_computed_at: Date | null;
+  readonly nodes: string;
+  readonly offices: string;
+  readonly codes: string;
+  readonly requirements: string;
+  readonly caveats: string;
+}
+
+/**
+ * Every campaign with its sizing.
+ *
+ * Read from `campaign_summary` rather than from `campaign`, because the view is what guarantees the
+ * capture rate and its sample size arrive together. Acceptance test 9 is a display requirement and
+ * the view is where it is enforced: nothing reading this can get one figure without the other.
+ */
+export function campaigns(): Promise<CampaignRow[]> {
+  return query<CampaignRow>('select * from campaign_summary order by som_usd desc nulls last, campaign_id');
+}
+
+export async function campaign(campaignId: string): Promise<CampaignRow | null> {
+  const rows = await query<CampaignRow>(
+    'select * from campaign_summary where campaign_id = $1::bigint',
+    [campaignId],
+  );
+  return rows[0] ?? null;
+}
+
+export interface CampaignEvidenceRow {
+  readonly figure: string;
+  readonly rule_id: string;
+  readonly detail: string;
+  readonly supports: boolean;
+}
+
+/** Caveats first. The corpus-is-not-the-market one is always among them. */
+export function campaignEvidence(campaignId: string): Promise<CampaignEvidenceRow[]> {
+  return query<CampaignEvidenceRow>(
+    `select figure, rule_id, detail, supports
+       from campaign_sizing_evidence
+      where campaign_id = $1::bigint
+      order by supports, figure, rule_id`,
+    [campaignId],
+  );
+}
+
+/** What a campaign competes under, and where. The scope behind every figure on the screen. */
+export function campaignScope(campaignId: string): Promise<{
+  nodes: { node_key: string; node_name: string }[];
+  offices: { agency_code: string; office_code: string; agency_label: string | null; office_label: string | null }[];
+  codes: { code_type: string; code_value: string; label: string | null }[];
+}> {
+  return Promise.all([
+    query<{ node_key: string; node_name: string }>(
+      `select t.node_key, t.node_name
+         from campaign_node cn join taxonomy_node t on t.node_id = cn.node_id
+        where cn.campaign_id = $1::bigint order by t.node_key`,
+      [campaignId],
+    ),
+    query<{ agency_code: string; office_code: string; agency_label: string | null; office_label: string | null }>(
+      `select co.agency_code, co.office_code, al.label as agency_label, ol.label as office_label
+         from campaign_office co
+         left join code_label_current al on al.code_type = 'agency' and al.code_value = co.agency_code
+         left join code_label_current ol on ol.code_type = 'office' and ol.code_value = co.office_code
+        where co.campaign_id = $1::bigint order by co.agency_code, co.office_code`,
+      [campaignId],
+    ),
+    query<{ code_type: string; code_value: string; label: string | null }>(
+      `select cc.code_type, cc.code_value, l.label
+         from campaign_code cc
+         left join code_label_current l
+                on l.code_type = cc.code_type and l.code_value = cc.code_value
+        where cc.campaign_id = $1::bigint order by cc.code_type, cc.code_value`,
+      [campaignId],
+    ),
+  ]).then(([nodes, offices, codes]) => ({ nodes, offices, codes }));
+}
+
+export interface GapRow {
+  readonly pursuit_id: string;
+  readonly title: string;
+  readonly signal_class: string;
+  readonly agency_code: string | null;
+  readonly agency_label: string | null;
+  readonly naics_code: string | null;
+  readonly psc_code: string | null;
+  readonly estimated_value: string | null;
+  readonly response_date: Date | null;
+  readonly period_end_date: Date | null;
+  readonly first_seen_at: Date;
+  readonly would_match: string | null;
+  readonly uncodeable: boolean;
+}
+
+/**
+ * The gap report. Acceptance test 10.
+ *
+ * Ordered by value so the largest unclaimed work is first, which is the only ordering that makes a
+ * gap report worth opening twice.
+ */
+export function campaignGap(limit: number, offset: number): Promise<Page<GapRow>> {
+  return paged<GapRow>(
+    `select g.pursuit_id::text, g.title, g.signal_class, g.agency_code, al.label as agency_label,
+            g.naics_code, g.psc_code, g.estimated_value::text, g.response_date, g.period_end_date,
+            g.first_seen_at, g.would_match, g.uncodeable
+       from campaign_gap g
+       left join code_label_current al
+              on al.code_type = 'agency' and al.code_value = g.agency_code
+      order by g.estimated_value desc nulls last, g.pursuit_id
+      limit $1 offset $2`,
+    'select count(*)::text as n from campaign_gap',
+    [],
+    limit,
+    offset,
+  );
+}
+
+export interface GapSummary {
+  readonly total: number;
+  readonly matchable: number;
+  readonly uncodeable: number;
+  readonly value_usd: string | null;
+  readonly without_value: number;
+}
+
+export async function gapSummary(): Promise<GapSummary> {
+  const [row] = await query<Record<string, string | null>>(
+    `select count(*)::text                                              as total,
+            count(*) filter (where would_match is not null)::text        as matchable,
+            count(*) filter (where uncodeable)::text                     as uncodeable,
+            sum(estimated_value)::text                                   as value_usd,
+            count(*) filter (where estimated_value is null)::text        as without_value
+       from campaign_gap`,
+  );
+  return {
+    total: Number(row!.total ?? 0),
+    matchable: Number(row!.matchable ?? 0),
+    uncodeable: Number(row!.uncodeable ?? 0),
+    value_usd: row!.value_usd ?? null,
+    without_value: Number(row!.without_value ?? 0),
+  };
+}
+
 /* ============================================================ review queue */
 
 export interface ReviewRow {

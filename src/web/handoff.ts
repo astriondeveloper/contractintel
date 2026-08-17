@@ -111,7 +111,12 @@ export function handoffFields(row: HandoffRow): HandoffField[] {
     },
     { label: 'Band', value: row.band === null ? 'not scored' : row.band },
     { label: 'SAM.gov', value: orNot(row.notice_url) },
-    { label: 'Source', value: 'Astrion Contract Intelligence. TechnoMile is the system of record.' },
+    {
+      label: 'Source',
+      value:
+        'Astrion Contract Intelligence, created by Gavin Taylor. ' +
+        'TechnoMile is the system of record.',
+    },
   ];
 }
 

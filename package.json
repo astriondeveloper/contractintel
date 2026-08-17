@@ -26,7 +26,12 @@
     "load:sam": "tsx src/loaders/run-sam.ts",
     "score": "tsx src/scoring/run-score.ts",
     "forecast": "tsx src/forecast/run-forecast.ts",
-    "forecast:backtest": "tsx src/forecast/run-backtest.ts"
+    "forecast:backtest": "tsx src/forecast/run-backtest.ts",
+    "campaign": "tsx src/campaign/run-campaign.ts",
+    "size": "tsx src/campaign/run-campaign.ts --size",
+    "readiness": "tsx scripts/readiness.ts",
+    "digest": "tsx src/digest/run-digest.ts",
+    "sam:stub": "tsx scripts/sam-stub.ts"
   },
   "dependencies": {
     "csv-parse": "^5.5.6",

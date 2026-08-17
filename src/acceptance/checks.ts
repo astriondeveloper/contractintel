@@ -296,24 +296,141 @@ export async function runAcceptanceChecks(): Promise<Result[]> {
   }
 
   // -------------------------------------------------------------------------
-  // 9 and 10. Campaign sizing and the gap report.
+  // 9. Campaign sizing, with the sample size beside the capture rate.
+  //
+  // The test spec 18 asks for is a *display* property: TAM, SAM and SOM shown together, and the
+  // capture rate never shown without the sample size behind it. So the check is against
+  // `campaign_summary`, which is the view both the screen and the CLI read. Asserting it against
+  // `campaign` would pass on a build whose screen had quietly dropped the sample size.
   // -------------------------------------------------------------------------
   const campaigns = await count('select count(*)::text as n from campaign');
-  record(
-    9,
-    'A campaign shows TAM, SAM, SOM with the sample size beside the capture rate',
-    'BLOCKED',
-    campaigns === 0
-      ? 'No campaign exists yet. Campaign sizing is a later phase. The columns, including ' +
-        'capture_rate_sample_size, are in place.'
-      : `${campaigns} campaign(s) exist but sizing is not computed yet.`,
+
+  if (campaigns === 0) {
+    record(
+      9,
+      'A campaign shows TAM, SAM, SOM with the sample size beside the capture rate',
+      'BLOCKED',
+      'No campaign is defined, so there is nothing to size. BD Ops defines one: npm run campaign -- ' +
+        '--create "<name>" --nodes CAP-01 --offices 9700/FA8601 --actor <you>',
+    );
+  } else {
+    const sized = await count(
+      'select count(*)::text as n from campaign_summary where sizing_computed_at is not null',
+    );
+
+    if (sized === 0) {
+      record(
+        9,
+        'A campaign shows TAM, SAM, SOM with the sample size beside the capture rate',
+        'BLOCKED',
+        `${campaigns} campaign(s) defined and none sized yet. Run: npm run size -- --actor <you>`,
+      );
+    } else {
+      // A rate without its sample size is the failure this test exists to catch. Both directions
+      // count: a sample size with no rate is equally meaningless.
+      const rateWithoutSample = await count(
+        `select count(*)::text as n from campaign_summary
+          where (capture_rate is not null and capture_rate_sample_size is null)
+             or (capture_rate_sample_size is not null and capture_rate is null)`,
+      );
+      // A sized campaign that recorded no window cannot be reproduced, so its figures are not
+      // figures. Spec 11 wants the sizing basis on the record.
+      const sizedWithoutWindow = await count(
+        `select count(*)::text as n from campaign_summary
+          where sizing_computed_at is not null
+            and (sizing_fy_from is null or sizing_fy_to is null)`,
+      );
+      // Every sized campaign carries the corpus-is-not-the-market caveat, and it cannot be turned
+      // off. A TAM shown without it is the most quotable wrong number in the system.
+      const withoutCaveat = await count(
+        `select count(*)::text as n from campaign c
+          where c.sizing_computed_at is not null
+            and c.tam_usd is not null
+            and not exists (
+              select 1 from campaign_sizing_evidence e
+               where e.campaign_id = c.campaign_id
+                 and e.figure = 'tam' and not e.supports
+            )`,
+      );
+
+      const example = await query<{
+        campaign_name: string;
+        tam_usd: string | null;
+        sam_usd: string | null;
+        som_usd: string | null;
+        capture_rate: string | null;
+        capture_rate_sample_size: number | null;
+        capture_rate_standing: string;
+      }>(
+        `select campaign_name, tam_usd::text, sam_usd::text, som_usd::text, capture_rate::text,
+                capture_rate_sample_size, capture_rate_standing
+           from campaign_summary
+          where sizing_computed_at is not null
+          order by campaign_id limit 1`,
+      );
+
+      const failures =
+        rateWithoutSample + sizedWithoutWindow + withoutCaveat > 0
+          ? [
+              rateWithoutSample > 0 ? `${rateWithoutSample} carry a capture rate apart from its sample size` : '',
+              sizedWithoutWindow > 0 ? `${sizedWithoutWindow} were sized without recording the window` : '',
+              withoutCaveat > 0 ? `${withoutCaveat} show a TAM with no caveat on it` : '',
+            ].filter(Boolean)
+          : [];
+
+      const row = example[0]!;
+      record(
+        9,
+        'A campaign shows TAM, SAM, SOM with the sample size beside the capture rate',
+        failures.length === 0 ? 'PASS' : 'FAIL',
+        failures.length > 0
+          ? `campaign_summary is not honest about its own figures: ${failures.join('; ')}. Spec 11.2.`
+          : `${sized} of ${campaigns} campaign(s) sized. "${row.campaign_name}" shows TAM ` +
+            `${row.tam_usd ?? 'not computed'}, SAM ${row.sam_usd ?? 'not computed'}, SOM ` +
+            `${row.som_usd ?? 'not computed'}, and a capture rate of ` +
+            `${row.capture_rate === null ? 'not measurable' : `${(Number(row.capture_rate) * 100).toFixed(1)} percent`} ` +
+            `over ${row.capture_rate_sample_size ?? 0} award(s), standing "${row.capture_rate_standing}". ` +
+            'Every sized campaign carries the caveat that TAM is a floor bounded by the corpus.',
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 10. The gap report lists at least one opportunity with no campaign.
+  // -------------------------------------------------------------------------
+  const requirements = await count(
+    "select count(*)::text as n from pursuit where signal_class <> 'market_movement'",
   );
-  record(
-    10,
-    'The gap report lists at least one opportunity with no campaign',
-    'BLOCKED',
-    'The gap report is a later phase. It needs campaigns and pursuits.',
-  );
+
+  if (requirements === 0) {
+    record(
+      10,
+      'The gap report lists at least one opportunity with no campaign',
+      'BLOCKED',
+      'No requirement is loaded, so there is nothing that could be in or out of a campaign. ' +
+        'Run: npm run load:sam, or npm run signals.',
+    );
+  } else {
+    const gap = await count('select count(*)::text as n from campaign_gap');
+    const matchable = await count(
+      'select count(*)::text as n from campaign_gap where would_match is not null',
+    );
+    const uncodeable = await count('select count(*)::text as n from campaign_gap where uncodeable');
+
+    record(
+      10,
+      'The gap report lists at least one opportunity with no campaign',
+      gap > 0 ? 'PASS' : 'FAIL',
+      gap > 0
+        ? `campaign_gap lists ${gap} of ${requirements} requirement(s) that no campaign claims. ` +
+          `${matchable} match the codes of a campaign that already exists and could be claimed with ` +
+          `npm run campaign -- --id <n> --assign; ${uncodeable} carry neither a NAICS nor a PSC, so ` +
+          'no campaign could claim them on codes alone.'
+        : `Every one of the ${requirements} requirement(s) is already in a campaign, so the report ` +
+          'is empty. That is worth checking rather than celebrating: it also happens when one ' +
+          'campaign claims everything.',
+    );
+  }
 
   // -------------------------------------------------------------------------
   // 11 and 12. The interface.
