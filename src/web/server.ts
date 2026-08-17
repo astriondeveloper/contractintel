@@ -18,11 +18,15 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { closePool, pool } from '../db/index.js';
-import { databaseState } from './queries.js';
+import { databaseState, pipelineCounts } from './queries.js';
 import { page } from './layout.js';
 import { html } from './html.js';
 import type { Ctx } from './shell.js';
+import { currentUser, authMode, whyNoWrite } from './auth.js';
+import { isAction, performAction, readForm, touchUser } from './actions.js';
 
+import { dashboard, dashboardJson } from './pages/dashboard.js';
+import { pipelineScreen, myWork } from './pages/pipeline.js';
 import { overview, overviewJson } from './pages/overview.js';
 import { upcoming, upcomingJson } from './pages/upcoming.js';
 import { pursuit } from './pages/pursuit.js';
@@ -80,7 +84,12 @@ async function staticAsset(pathname: string): Promise<{ body: Buffer; type: stri
 type Handler = (ctx: Ctx) => Promise<string>;
 
 const ROUTES: Record<string, Handler> = {
-  '/': overview,
+  '/': dashboard,
+  '/pipeline': pipelineScreen,
+  '/my-work': myWork,
+  // Kept and unlisted. The corpus overview answers "what is loaded", which is a question
+  // for whoever maintains the system rather than the first thing BD should see.
+  '/overview': overview,
   '/upcoming': upcoming,
   '/entities': entityList,
   '/contracts': contracts,
@@ -96,6 +105,7 @@ const ROUTES: Record<string, Handler> = {
 };
 
 const JSON_ROUTES: Record<string, () => Promise<unknown>> = {
+  '/api/dashboard': dashboardJson,
   '/api/overview': overviewJson,
   '/api/upcoming': upcomingJson,
   '/api/acceptance': acceptanceJson,
@@ -119,10 +129,45 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
   const { pathname } = url;
 
-  // Read only, enforced at the door rather than by the absence of forms.
+  // POST is answered on exactly one shape of path and nowhere else. Everything that
+  // writes goes through it, so the audit trail cannot be bypassed by finding another
+  // endpoint. Spec section 20.
+  const actionMatch = /^\/pursuits\/(\d{1,19})\/([a-z-]+)$/.exec(pathname);
+
+  if (request.method === 'POST') {
+    if (actionMatch === null || !isAction(actionMatch[2]!)) {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('No such action.\n');
+      return;
+    }
+
+    // No signed-in user, no write. Not a fallback to a default actor: an audit trail full
+    // of names that mean nothing is worse than no audit trail, because it looks like one.
+    const user = currentUser(request);
+    if (user === null) {
+      response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end(`${whyNoWrite()}\n`);
+      return;
+    }
+
+    const form = await readForm(request);
+    const result = await performAction(actionMatch[2]!, actionMatch[1]!, form, user);
+    const target = result.ok
+      ? result.redirectTo
+      : `${result.redirectTo}?problem=${encodeURIComponent(result.message ?? 'That did not work.')}`;
+
+    // Redirect after post, so a refresh does not repeat the action.
+    response.writeHead(303, { location: target });
+    response.end();
+    return;
+  }
+
   if (request.method !== 'GET' && request.method !== 'HEAD') {
-    response.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET, HEAD' });
-    response.end('This interface is read only. Only GET and HEAD are answered.\n');
+    response.writeHead(405, {
+      'content-type': 'text/plain; charset=utf-8',
+      allow: 'GET, HEAD, POST',
+    });
+    response.end('Only GET, HEAD and POST are answered, and POST only on a pursuit action.\n');
     return;
   }
 
@@ -168,7 +213,29 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   }
 
   const state = await databaseState();
-  const ctx: Ctx = { url, state };
+  const user = currentUser(request);
+  if (user !== null) await touchUser(user);
+
+  // Rail badges. Cheap enough to compute on every render and the reason a queue gets
+  // worked: a number beside the link is seen, a queue behind it is not.
+  const counts = state.migrationsApplied === 0
+    ? null
+    : await pipelineCounts(user?.principalName ?? '').catch(() => null);
+
+  const ctx: Ctx = {
+    url,
+    state,
+    user,
+    badges: counts === null ? {} : { '/pipeline': counts.due_45, '/my-work': counts.mine },
+  };
+
+  if (pathname === '/upcoming' && url.searchParams.get('keep') !== '1') {
+    // Superseded by /pipeline, which does everything it did and more. The old URL is kept
+    // working rather than 404ing somebody's bookmark; ?keep=1 still renders the old screen.
+    response.writeHead(302, { location: `/pipeline${url.search}` });
+    response.end();
+    return;
+  }
 
   const route = ROUTES[pathname];
   if (route) {

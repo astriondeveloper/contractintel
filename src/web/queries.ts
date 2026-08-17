@@ -883,6 +883,8 @@ export interface PursuitDetailRow extends UpcomingRow {
   readonly generated_by: string | null;
   readonly generated_at: Date | null;
   readonly signal_key: string | null;
+  readonly snoozed_until: Date | null;
+  readonly state_changed_at: Date | null;
 }
 
 export async function pursuitDetail(pursuitId: string): Promise<PursuitDetailRow | null> {
@@ -894,6 +896,7 @@ export async function pursuitDetail(pursuitId: string): Promise<PursuitDetailRow
             p.state, p.owner, p.notice_type, p.response_date, p.posted_date,
             p.naics_code, p.psc_code, p.set_aside_code, p.notice_url, p.solicitation_number,
             p.office_code, p.generated_by, p.generated_at, p.signal_key,
+            p.snoozed_until, p.state_changed_at,
             a.band, a.strategic_fit::text, a.coverage::text, a.assessment_id::text
        from pursuit p
        left join entity e on e.entity_id = p.incumbent_entity_id
@@ -920,6 +923,218 @@ export function profileMatches(pursuitId: string): Promise<
       where m.pursuit_id = $1::bigint
       order by m.matched_on, op.code_value`,
     [pursuitId],
+  );
+}
+
+/* ================================================================ pipeline */
+
+export interface PipelineRow {
+  readonly pursuit_id: string;
+  readonly signal_class: string;
+  readonly title: string;
+  readonly state: string;
+  readonly owner: string | null;
+  readonly snoozed_until: Date | null;
+  readonly agency_code: string | null;
+  readonly agency_label: string | null;
+  readonly solicitation_number: string | null;
+  readonly related_piid: string | null;
+  readonly estimated_value: string | null;
+  readonly due_date: Date | null;
+  readonly response_date: Date | null;
+  readonly period_end_date: Date | null;
+  readonly astrion_position: string | null;
+  readonly band: string | null;
+  readonly strategic_fit: string | null;
+  readonly coverage: string | null;
+  readonly note_count: string;
+  readonly is_snoozed: boolean;
+  readonly is_unclaimed: boolean;
+  readonly is_closed: boolean;
+}
+
+const PIPELINE_SELECT = `
+  select i.pursuit_id::text, i.signal_class, i.title, i.state, i.owner, i.snoozed_until,
+         i.agency_code, al.label as agency_label, i.solicitation_number, i.related_piid,
+         i.estimated_value::text, i.due_date, i.response_date, i.period_end_date,
+         i.astrion_position, i.band, i.strategic_fit::text, i.coverage::text,
+         i.note_count::text, i.is_snoozed, i.is_unclaimed, i.is_closed
+    from pipeline_item i
+    left join code_label_current al
+           on al.code_type = 'agency' and al.code_value = i.agency_code`;
+
+/**
+ * The pipeline, filtered the way business development thinks about it.
+ *
+ * `view` is the saved question rather than a column filter: "mine", "unclaimed", "due"
+ * and "closed" are the four things anybody actually asks of a queue, and spelling them
+ * out here keeps the same definition behind the dashboard card and the full list.
+ */
+const PIPELINE_FILTER = `
+  ($1 = '' or i.title ilike '%' || $1 || '%'
+           or i.solicitation_number ilike '%' || $1 || '%'
+           or i.related_piid ilike '%' || $1 || '%'
+           or i.agency_code ilike '%' || $1 || '%')
+  and ($2 = '' or i.signal_class = $2)
+  and ($3 = '' or i.band = $3)
+  and (case $4
+         when 'mine'      then i.owner = $5 and not i.is_closed
+         when 'unclaimed' then i.is_unclaimed and not i.is_snoozed
+         when 'due'       then i.due_date is not null
+                               and i.due_date <= current_date + interval '45 days'
+                               and not i.is_closed and not i.is_snoozed
+         when 'snoozed'   then i.is_snoozed
+         when 'closed'    then i.is_closed
+         else not i.is_closed and not i.is_snoozed
+       end)`;
+
+export function pipeline(
+  search: string,
+  signalClass: string,
+  band: string,
+  view: string,
+  principal: string,
+  sort: string,
+  limit: number,
+  offset: number,
+): Promise<Page<PipelineRow>> {
+  return paged<PipelineRow>(
+    `${PIPELINE_SELECT}
+      where ${PIPELINE_FILTER}
+      order by
+        case when $6 = 'fit' then i.strategic_fit end desc nulls last,
+        case when $6 = 'value' then i.estimated_value end desc nulls last,
+        i.due_date asc nulls last, i.pursuit_id
+      limit $7 offset $8`,
+    `select count(*)::text as n from pipeline_item i where ${PIPELINE_FILTER}`,
+    [search, signalClass, band, view, principal, sort],
+    limit,
+    offset,
+    [search, signalClass, band, view, principal],
+  );
+}
+
+export interface PipelineCounts {
+  readonly open: number;
+  readonly mine: number;
+  readonly unclaimed: number;
+  readonly due_45: number;
+  readonly overdue: number;
+  readonly snoozed: number;
+  readonly won: number;
+  readonly lost: number;
+  readonly pursuing: number;
+  readonly pipeline_value: string | null;
+  readonly unscored: number;
+}
+
+export async function pipelineCounts(principal: string): Promise<PipelineCounts> {
+  const [row] = await query<Record<keyof PipelineCounts, string | null>>(
+    `select
+       count(*) filter (where not is_closed and not is_snoozed)::text                     as open,
+       count(*) filter (where owner = $1 and not is_closed)::text                         as mine,
+       count(*) filter (where is_unclaimed and not is_snoozed)::text                      as unclaimed,
+       count(*) filter (where due_date is not null and due_date between current_date
+                              and current_date + interval '45 days' and not is_closed
+                              and not is_snoozed)::text                                   as due_45,
+       count(*) filter (where due_date is not null and due_date < current_date
+                              and not is_closed)::text                                    as overdue,
+       count(*) filter (where is_snoozed)::text                                           as snoozed,
+       count(*) filter (where state = 'won')::text                                        as won,
+       count(*) filter (where state = 'lost')::text                                       as lost,
+       count(*) filter (where state = 'pursuing')::text                                   as pursuing,
+       sum(estimated_value) filter (where not is_closed and not is_snoozed)::text         as pipeline_value,
+       count(*) filter (where band is null and not is_closed)::text                       as unscored
+     from pipeline_item`,
+    [principal],
+  );
+  const n = (key: keyof PipelineCounts) => Number(row![key] ?? 0);
+  return {
+    open: n('open'),
+    mine: n('mine'),
+    unclaimed: n('unclaimed'),
+    due_45: n('due_45'),
+    overdue: n('overdue'),
+    snoozed: n('snoozed'),
+    won: n('won'),
+    lost: n('lost'),
+    pursuing: n('pursuing'),
+    pipeline_value: row!.pipeline_value,
+    unscored: n('unscored'),
+  };
+}
+
+/** The pipeline broken down by working state, for the funnel card. */
+export function pipelineByState(): Promise<{ state: string; n: string; value: string | null }[]> {
+  return query(
+    `select state, count(*)::text as n, sum(estimated_value)::text as value
+       from pipeline_item where not is_closed group by state`,
+  );
+}
+
+/** Where the work is concentrated. The answer to "who should we be talking to". */
+export function pipelineByAgency(limit = 8): Promise<
+  { agency_code: string; label: string | null; n: string; value: string | null }[]
+> {
+  return query(
+    `select i.agency_code, max(al.label) as label, count(*)::text as n,
+            sum(i.estimated_value)::text as value
+       from pipeline_item i
+       left join code_label_current al
+              on al.code_type = 'agency' and al.code_value = i.agency_code
+      where not i.is_closed and i.agency_code is not null
+      group by i.agency_code
+      order by count(*) desc
+      limit $1`,
+    [limit],
+  );
+}
+
+export interface NoteRow {
+  readonly note_id: string;
+  readonly author: string;
+  readonly body: string;
+  readonly created_at: Date;
+}
+
+export function notesFor(pursuitId: string): Promise<NoteRow[]> {
+  return query<NoteRow>(
+    `select note_id::text, author, body, created_at
+       from pursuit_note where pursuit_id = $1::bigint order by created_at desc`,
+    [pursuitId],
+  );
+}
+
+export interface AuditRow {
+  readonly actor: string;
+  readonly action: string;
+  readonly object_type: string;
+  readonly object_key: string;
+  readonly reason: string | null;
+  readonly occurred_at: Date;
+  readonly title: string | null;
+}
+
+/** What people have been doing. The team-activity card, and the record's own history. */
+export function recentActivity(limit = 25, pursuitId?: string): Promise<AuditRow[]> {
+  return query<AuditRow>(
+    `select a.actor, a.action, a.object_type, a.object_key, a.reason, a.occurred_at,
+            p.title
+       from audit_log a
+       left join pursuit p
+              on a.object_type = 'pursuit' and p.pursuit_id = a.object_key::bigint
+      where ($2::text is null or (a.object_type = 'pursuit' and a.object_key = $2))
+      order by a.occurred_at desc
+      limit $1`,
+    [limit, pursuitId ?? null],
+  );
+}
+
+/** People who have signed in, so work can be assigned to somebody who is not here now. */
+export function assignableUsers(): Promise<{ principal_name: string; display_name: string | null }[]> {
+  return query(
+    `select principal_name, display_name from app_user where active
+      order by coalesce(display_name, principal_name)`,
   );
 }
 

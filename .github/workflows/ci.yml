@@ -125,10 +125,11 @@ jobs:
             sleep 1
           done
           status=0
-          for route in / /upcoming '/upcoming?class=active_solicitation' '/upcoming?sort=fit' /entities /contracts /subcontracts /customers /programs \
-                       /dacis-contracts /taxonomy /watchlist /review /quality /acceptance \
-                       /healthz /api/overview /api/upcoming /api/acceptance /api/quality \
-                       /app.css /fonts/Archivo-Regular.woff2; do
+          for route in / /pipeline '/pipeline?view=unclaimed' '/pipeline?view=due&sort=fit' \
+                       /my-work /overview /entities /contracts /subcontracts /customers \
+                       /programs /dacis-contracts /taxonomy /watchlist /review /quality \
+                       /acceptance /healthz /api/dashboard /api/overview /api/upcoming \
+                       /api/acceptance /api/quality /app.css /fonts/Archivo-Regular.woff2; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$route")
             if [ "$code" != "200" ]; then
               echo "::error::$route returned $code"
@@ -137,10 +138,19 @@ jobs:
               echo "  $code  $route"
             fi
           done
-          # Read only is a property of the router, not just an absence of forms.
+          # Writing is answered on exactly one shape of path and nowhere else, so the
+          # audit trail cannot be bypassed by finding another endpoint.
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/)
-          if [ "$code" != "405" ]; then
-            echo "::error::POST / returned $code, expected 405. The interface must be read only."
+          if [ "$code" != "404" ]; then
+            echo "::error::POST / returned $code, expected 404. POST is only a pursuit action."
+            status=1
+          fi
+          # And with no authentication configured, a real action is refused rather than
+          # attributed to nobody. CIE_AUTH_MODE is unset in this job, so this is the
+          # secure default being checked rather than a special case.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/pursuits/1/claim)
+          if [ "$code" != "403" ]; then
+            echo "::error::POST a claim returned $code, expected 403. No actor, no write."
             status=1
           fi
           kill "$(cat web.pid)" 2>/dev/null || true

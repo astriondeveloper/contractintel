@@ -162,7 +162,7 @@ async function main(): Promise<void> {
   const bodies: { key: string; label: string | null; html: string }[] = [];
 
   for (const screen of SCREENS) {
-    const ctx: Ctx = { url: new URL(`http://demo${screen.path}`), state };
+    const ctx: Ctx = { url: new URL(`http://demo${screen.path}`), state, user: null };
     const rendered = await screen.render(ctx);
     bodies.push({
       key: screen.key,
@@ -173,7 +173,7 @@ async function main(): Promise<void> {
   }
 
   for (const row of top.rows) {
-    const ctx: Ctx = { url: new URL(`http://demo/entities/${row.entity_id}`), state };
+    const ctx: Ctx = { url: new URL(`http://demo/entities/${row.entity_id}`), state, user: null };
     const rendered = await entityDetail(ctx, row.entity_id);
     if (rendered === null) continue;
     bodies.push({
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
   process.stdout.write(`  ${top.rows.length} entity detail screen(s)\n`);
 
   for (const row of topPursuits.rows) {
-    const ctx: Ctx = { url: new URL(`http://demo/pursuits/${row.pursuit_id}`), state };
+    const ctx: Ctx = { url: new URL(`http://demo/pursuits/${row.pursuit_id}`), state, user: null };
     const rendered = await pursuit(ctx, row.pursuit_id);
     if (rendered === null) continue;
     bodies.push({

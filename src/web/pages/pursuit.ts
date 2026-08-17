@@ -23,14 +23,22 @@ import { screen, type Ctx } from '../shell.js';
 import { chip, fields, section, table, tiles } from '../components.js';
 import { day, moment, orAbsent, truncate, usd, ABSENT } from '../format.js';
 import {
+  assignableUsers,
   currentAssessment,
   evidenceFor,
   factorResults,
   gateResults,
+  notesFor,
   profileMatches,
   pursuitDetail,
+  recentActivity,
   type EvidenceRow,
 } from '../queries.js';
+import { card, cards } from '../components.js';
+import { since } from '../format.js';
+import { text } from '../params.js';
+
+const STATES = ['open', 'qualifying', 'pursuing', 'submitted', 'won', 'lost', 'dropped'];
 
 function bandChip(band: string | null) {
   if (band === 'pursue') return chip('pass', 'Pursue');
@@ -68,12 +76,56 @@ export async function pursuit(ctx: Ctx, pursuitId: string): Promise<string | nul
   if (record === null) return null;
 
   const assessment = await currentAssessment(pursuitId);
-  const [factors, gates, evidence, matches] = await Promise.all([
+  const [factors, gates, evidence, matches, notes, history, people] = await Promise.all([
     assessment ? factorResults(assessment.assessment_id) : Promise.resolve([]),
     assessment ? gateResults(assessment.assessment_id) : Promise.resolve([]),
     assessment ? evidenceFor(assessment.assessment_id) : Promise.resolve([]),
     profileMatches(pursuitId),
+    notesFor(pursuitId),
+    recentActivity(20, pursuitId),
+    assignableUsers(),
   ]);
+
+  const signedIn = ctx.user !== null;
+  const mine = signedIn && record.owner === ctx.user!.principalName;
+  const post = (action: string) => `/pursuits/${pursuitId}/${action}`;
+
+  /**
+   * The action bar.
+   *
+   * Every button is a form POST rather than a link, because a link that changes something
+   * is a change a browser will make on its own while prefetching. Nothing is shown as
+   * disabled-but-present when there is no signed-in user: the bar is replaced by the reason,
+   * so it is obvious why rather than mysteriously inert.
+   */
+  const actionBar = signedIn
+    ? html`${mine
+          ? html`<form method="post" action="${post('release')}">
+              <button class="quiet" type="submit">Release</button>
+            </form>`
+          : html`<form method="post" action="${post('claim')}">
+              <button type="submit">${record.owner ? 'Take over' : 'Claim'}</button>
+            </form>`}
+        <form method="post" action="${post('set-state')}">
+          <select name="state" aria-label="Pipeline state">
+            ${STATES.map(
+              (state) =>
+                html`<option value="${state}"${record.state === state ? html` selected` : ''}>${state}</option>`,
+            )}
+          </select>
+          <button class="quiet" type="submit">Set state</button>
+        </form>
+        ${record.snoozed_until
+          ? html`<form method="post" action="${post('unsnooze')}">
+              <button class="quiet" type="submit">Un-snooze</button>
+            </form>`
+          : html`<form method="post" action="${post('snooze')}">
+              <input type="date" name="until" aria-label="Snooze until">
+              <button class="quiet" type="submit">Snooze</button>
+            </form>`}`
+    : html`<span class="state-pill">Read only · sign in to work this pursuit</span>`;
+
+  const problem = text(ctx.url, 'problem');
 
   const byFactor = new Map<string, EvidenceRow[]>();
   const byGate = new Map<string, EvidenceRow[]>();
@@ -88,7 +140,11 @@ export async function pursuit(ctx: Ctx, pursuitId: string): Promise<string | nul
   const summary = fields([
     { label: 'Stage', value: record.signal_class },
     { label: 'State', value: chip('neutral', record.state) },
-    { label: 'Owner', value: orAbsent(record.owner) },
+    { label: 'Owner', value: record.owner ? record.owner : html`<span class="sub">unclaimed</span>` },
+    {
+      label: 'Snoozed until',
+      value: record.snoozed_until ? day(record.snoozed_until) : ABSENT,
+    },
     {
       label: 'Agency',
       value: orAbsent(record.agency_label ?? record.agency_code),
@@ -218,8 +274,65 @@ export async function pursuit(ctx: Ctx, pursuitId: string): Promise<string | nul
 
   const contrary = evidence.filter((row) => row.is_contrary);
 
+  const workCards = cards([
+    card({
+      title: 'Notes',
+      hint: `${notes.length}`,
+      plain: false,
+      body: html`${signedIn
+          ? html`<div class="note">
+              <form method="post" action="${post('note')}">
+                <textarea name="body" placeholder="What did you learn? What happens next?" aria-label="Note"></textarea>
+                <div class="actions" style="margin-top:8px"><button type="submit">Add note</button></div>
+              </form>
+            </div>`
+          : ''}
+        ${notes.length === 0 && !signedIn
+          ? html`<div class="empty">No notes yet.</div>`
+          : notes.map(
+              (note) => html`<div class="note">
+                <div class="who">${note.author} · ${since(note.created_at)}</div>
+                <div class="body">${note.body}</div>
+              </div>`,
+            )}`,
+    }),
+    card({
+      title: 'History',
+      hint: 'Every change, from the audit log',
+      body:
+        history.length === 0
+          ? html`<div class="empty">
+              Nothing has been changed yet. Claiming this, setting a state or adding a note
+              writes an audit row and it appears here.
+            </div>`
+          : html`${history.map(
+              (row) => html`<div class="feed">
+                <div class="top"><span class="headline">${orAbsent(row.reason ?? row.action)}</span></div>
+                <div class="meta"><span>${row.actor}</span><span>${since(row.occurred_at)}</span></div>
+              </div>`,
+            )}`,
+    }),
+  ]);
+
   const body = html`
+    ${problem ? html`<div class="notice alert"><h3>That did not work</h3>${problem}</div>` : ''}
     ${summary}
+    ${signedIn && people.length > 1
+      ? html`<div class="search" style="margin-top:12px">
+          <form method="post" action="${post('assign')}" class="actions">
+            <select name="owner" aria-label="Assign to">
+              ${people.map(
+                (person) =>
+                  html`<option value="${person.principal_name}"${
+                    record.owner === person.principal_name ? html` selected` : ''
+                  }>${person.display_name ?? person.principal_name}</option>`,
+              )}
+            </select>
+            <button class="quiet" type="submit">Assign</button>
+          </form>
+        </div>`
+      : ''}
+    ${workCards}
     ${assessment === null ? noAssessment : scoreTiles}
     ${assessment && assessment.status === 'insufficient_evidence'
       ? html`<div class="notice">
@@ -285,6 +398,7 @@ export async function pursuit(ctx: Ctx, pursuitId: string): Promise<string | nul
         ? 'Not yet assessed.'
         : `Assessed under score model v${assessment.score_model_version}. Every figure opens the rows behind it.`,
     body,
+    actions: actionBar,
     suppressEmptyNotice: true,
   });
 }

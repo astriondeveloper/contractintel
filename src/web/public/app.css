@@ -5,6 +5,11 @@
  * high-impact accent. Archivo throughout, self-hosted from src/web/public/fonts so the
  * face renders the same in a container with no outbound network as it does on a laptop.
  *
+ * The shell is a fixed left rail and a working surface, rather than a page with a menu
+ * across the top. That is not decoration: this is a tool somebody has open all day and
+ * moves between a queue and a record in, so navigation has to be a permanent fixture
+ * rather than something reached by scrolling back up.
+ *
  * Two acceptance tests from specification section 18 are enforced against this file by
  * scripts/acceptance.ts, so two rules here are load bearing rather than stylistic:
  *
@@ -54,29 +59,27 @@
 /* ------------------------------------------------------------------- palette */
 
 :root {
-  /* Dark core. Backgrounds and primary surfaces. */
   --astrion-black: #101820;
   --midnight: #222230;
   --deep-space: #1e2436;
 
-  /* Neutrals. Light type on dark, dividers. */
   --alabaster: #f1e9db;
   --platinum: #dddddd;
   --silver: #bdbdbd;
+  --muted: #8b94a6;
 
-  /* High-impact accents. The 10 percent. */
   --twilight-te: #fc5442;
   --supernova: #ffaf2e;
   --astrion-sky: #29aae1;
 
-  /* Gradient stops. Thin accent elements only. */
   --refraction: #1ed872;
   --daylight: #4dd3f7;
   --zenith: #9382f9;
 
   --rule: #2b3446;
   --rule-soft: #232b3a;
-  --shell: 1440px;
+  --rail: 236px;
+  --shell: 1680px;
 }
 
 /* --------------------------------------------------------------------- base */
@@ -111,6 +114,11 @@ a:hover {
   text-decoration: underline;
 }
 
+:focus-visible {
+  outline: 2px solid var(--astrion-sky);
+  outline-offset: 2px;
+}
+
 h1,
 h2,
 h3 {
@@ -118,21 +126,22 @@ h3 {
   color: var(--alabaster);
   margin: 0;
   line-height: 1.2;
+  text-wrap: balance;
 }
 
 h1 {
-  font-size: 27px;
+  font-size: 25px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 
 h2 {
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 600;
 }
 
 h3 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -146,119 +155,221 @@ code,
   font-size: 13px;
 }
 
-/* ------------------------------------------------------------------- header */
+/* --------------------------------------------------------------- app shell */
 
-.masthead {
-  background: var(--astrion-black);
+.app {
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* ------------------------------------------------------------------- rail */
+
+.rail {
+  background: var(--midnight);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.rail-brand {
+  padding: 18px 18px 16px;
   border-bottom: 1px solid var(--rule);
 }
 
-/* The three-stop gradient as a thin edge element, which is the only role the
-   standards give it. Never a surface, never behind body text. */
-.masthead::before {
-  content: '';
-  display: block;
-  height: 3px;
-  background: linear-gradient(90deg, var(--refraction) 0%, var(--daylight) 50%, var(--zenith) 100%);
-}
-
-.masthead-inner {
-  max-width: var(--shell);
-  margin: 0 auto;
-  padding: 18px 24px 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.brand img {
-  height: 26px;
+.rail-brand img {
+  height: 22px;
   width: auto;
   display: block;
 }
 
-.brand-divider {
-  width: 1px;
-  height: 26px;
-  background: var(--rule);
-}
-
-.brand-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--alabaster);
-  letter-spacing: 0.01em;
-}
-
-.brand-sub {
+.rail-brand .product {
   font-size: 12px;
   font-weight: 500;
-  color: var(--silver);
+  color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
+  margin-top: 9px;
 }
 
-.masthead-meta {
-  text-align: right;
+.rail-group {
+  padding: 14px 10px 4px;
+}
+
+.rail-group .label {
   font-size: 12px;
-  color: var(--silver);
-  padding-top: 4px;
-}
-
-.masthead-meta strong {
-  color: var(--platinum);
   font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 0 8px 6px;
 }
 
-/* ---------------------------------------------------------------------- nav */
-
-.nav {
-  max-width: var(--shell);
-  margin: 0 auto;
-  padding: 0 24px;
+.rail a {
   display: flex;
-  gap: 2px;
-  flex-wrap: wrap;
-}
-
-.nav a {
-  display: block;
-  padding: 12px 12px 10px;
-  font-size: 13px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 1px 0;
+  border-radius: 4px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--silver);
-  border-bottom: 2px solid transparent;
-  white-space: nowrap;
+  border-left: 2px solid transparent;
 }
 
-.nav a:hover {
+.rail a:hover {
+  background: rgba(255, 255, 255, 0.04);
   color: var(--alabaster);
   text-decoration: none;
 }
 
-.nav a.current {
+.rail a.current {
+  background: rgba(41, 170, 225, 0.12);
+  border-left-color: var(--astrion-sky);
   color: var(--alabaster);
-  border-bottom-color: var(--astrion-sky);
+}
+
+.rail a .glyph {
+  width: 18px;
+  text-align: center;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.rail a.current .glyph {
+  color: var(--astrion-sky);
+}
+
+.rail a .badge {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--astrion-black);
+  background: var(--supernova);
+  border-radius: 9px;
+  padding: 0 7px;
+}
+
+.rail-foot {
+  margin-top: auto;
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rail-foot .slogan {
+  color: var(--platinum);
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+/* ------------------------------------------------------------------ topbar */
+
+.surface {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--astrion-black);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The three-stop gradient as a thin edge element, the only role the standards give it. */
+.topbar::before {
+  content: '';
+  display: block;
+  height: 2px;
+  background: linear-gradient(90deg, var(--refraction) 0%, var(--daylight) 50%, var(--zenith) 100%);
+}
+
+.topbar-inner {
+  max-width: var(--shell);
+  margin: 0 auto;
+  padding: 12px 26px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.topbar form.find {
+  flex: 1 1 420px;
+  max-width: 560px;
+  display: flex;
+  gap: 8px;
+}
+
+.topbar input[type='search'] {
+  flex: 1;
+  font-family: 'Archivo', Arial, sans-serif;
+  font-size: 14px;
+  background: var(--midnight);
+  color: var(--alabaster);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 8px 12px;
+}
+
+.topbar .who {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--silver);
+  white-space: nowrap;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--deep-space);
+  border: 1px solid var(--rule);
+  color: var(--alabaster);
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.state-pill {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 20px;
+  padding: 3px 10px;
 }
 
 /* --------------------------------------------------------------------- page */
 
 main {
   max-width: var(--shell);
+  width: 100%;
   margin: 0 auto;
-  padding: 28px 24px 64px;
+  padding: 24px 26px 64px;
 }
 
 .page-head {
-  margin-bottom: 22px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .page-head p {
@@ -269,7 +380,7 @@ main {
 }
 
 .section {
-  margin-top: 34px;
+  margin-top: 30px;
 }
 
 .section-head {
@@ -277,55 +388,56 @@ main {
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 10px;
-  margin-bottom: 14px;
+  padding-bottom: 9px;
+  margin-bottom: 13px;
   border-bottom: 1px solid var(--rule);
 }
 
 .section-head .hint {
   font-size: 12px;
-  color: var(--silver);
+  color: var(--muted);
 }
 
 /* -------------------------------------------------------------------- tiles */
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
   gap: 12px;
 }
 
 .tile {
   background: var(--deep-space);
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 14px 16px;
 }
 
 .tile .label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--silver);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
 
 .tile .value {
-  font-size: 26px;
+  font-size: 27px;
   font-weight: 700;
   color: var(--alabaster);
-  margin-top: 6px;
+  margin-top: 5px;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .tile .value.absent {
-  color: var(--silver);
+  color: var(--muted);
   font-weight: 500;
 }
 
 .tile .foot {
   font-size: 12px;
-  color: var(--silver);
+  color: var(--muted);
   margin-top: 4px;
 }
 
@@ -333,12 +445,147 @@ main {
   font-size: 12px;
 }
 
+/* A tile that is also a link to the queue it counts. */
+a.tile {
+  display: block;
+  color: inherit;
+}
+
+a.tile:hover {
+  border-color: var(--astrion-sky);
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------------------- cards */
+
+/* The dashboard grid. Widgets sit side by side and wrap; each one owns its own scroll. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(370px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.card {
+  background: var(--deep-space);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.card > header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card > header h3 {
+  font-size: 14px;
+}
+
+.card > header .hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card .card-body {
+  padding: 4px 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.card .card-body.plain {
+  padding: 16px;
+}
+
+.card .empty {
+  padding: 22px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* A row inside a card: the feed item shape. */
+.feed {
+  display: block;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--rule-soft);
+  color: inherit;
+}
+
+.feed:last-child {
+  border-bottom: none;
+}
+
+a.feed:hover {
+  background: rgba(41, 170, 225, 0.06);
+  text-decoration: none;
+}
+
+.feed .top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
+}
+
+.feed .headline {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--alabaster);
+}
+
+.feed .meta {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.feed .num {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--platinum);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A small horizontal bar for a share-of-total figure. */
+.meter {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--rule-soft);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  background: var(--astrion-sky);
+}
+
+.meter.warn > span {
+  background: var(--supernova);
+}
+
+.meter.good > span {
+  background: var(--refraction);
+}
+
 /* ------------------------------------------------------------------- tables */
 
 .table-wrap {
   overflow-x: auto;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--deep-space);
 }
 
@@ -352,7 +599,7 @@ thead th {
   text-align: left;
   font-size: 12px;
   font-weight: 600;
-  color: var(--silver);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 10px 12px;
@@ -384,19 +631,19 @@ th.num {
 }
 
 td.absent {
-  color: var(--silver);
+  color: var(--muted);
 }
 
 td .sub {
   display: block;
   font-size: 12px;
-  color: var(--silver);
+  color: var(--muted);
   margin-top: 2px;
 }
 
 .empty {
   padding: 26px 16px;
-  color: var(--silver);
+  color: var(--muted);
   font-size: 14px;
   text-align: center;
 }
@@ -456,9 +703,9 @@ td .sub {
   border: 1px solid var(--rule);
   border-left: 3px solid var(--supernova);
   background: var(--deep-space);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 14px 16px;
-  margin-bottom: 22px;
+  margin-bottom: 20px;
   font-size: 14px;
   color: var(--platinum);
 }
@@ -488,53 +735,101 @@ td .sub {
 .search {
   display: flex;
   gap: 8px;
-  margin-bottom: 14px;
+  margin-bottom: 13px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
-.search input[type='search'],
-.search input[type='text'],
-.search select {
+input[type='search'],
+input[type='text'],
+input[type='date'],
+select,
+textarea {
   font-family: 'Archivo', Arial, sans-serif;
   font-size: 13px;
   background: var(--astrion-black);
   color: var(--alabaster);
   border: 1px solid var(--rule);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 8px 10px;
-  min-width: 150px;
 }
 
-.search input[type='search']:focus,
-.search select:focus {
-  outline: 2px solid var(--astrion-sky);
-  outline-offset: -1px;
+textarea {
+  width: 100%;
+  min-height: 78px;
+  resize: vertical;
+  line-height: 1.5;
 }
 
 .search input[type='search'] {
-  flex: 1 1 300px;
+  flex: 1 1 280px;
 }
 
-.search button {
+button,
+.button {
   font-family: 'Archivo', Arial, sans-serif;
   font-size: 13px;
   font-weight: 600;
   background: var(--astrion-sky);
   color: var(--astrion-black);
   border: 1px solid var(--astrion-sky);
-  border-radius: 3px;
-  padding: 8px 16px;
+  border-radius: 4px;
+  padding: 8px 15px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
-.search button:hover {
+button:hover,
+.button:hover {
   background: #3fb8ec;
+  text-decoration: none;
+}
+
+button.quiet,
+.button.quiet {
+  background: transparent;
+  color: var(--platinum);
+  border-color: var(--rule);
+}
+
+button.quiet:hover,
+.button.quiet:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--silver);
+}
+
+button.danger {
+  background: transparent;
+  color: var(--twilight-te);
+  border-color: rgba(252, 84, 66, 0.5);
+}
+
+button.danger:hover {
+  background: rgba(252, 84, 66, 0.1);
+}
+
+button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .search a.clear {
   font-size: 13px;
-  align-self: center;
-  color: var(--silver);
+  color: var(--muted);
+}
+
+/* The action bar on a record. */
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.actions form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 /* --------------------------------------------------------------- pagination */
@@ -546,7 +841,7 @@ td .sub {
   gap: 16px;
   margin-top: 12px;
   font-size: 13px;
-  color: var(--silver);
+  color: var(--muted);
   flex-wrap: wrap;
 }
 
@@ -558,7 +853,7 @@ td .sub {
 .pager .links a,
 .pager .links span {
   border: 1px solid var(--rule);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 5px 11px;
   font-size: 13px;
 }
@@ -571,12 +866,12 @@ td .sub {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 0 28px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 26px;
   background: var(--deep-space);
   border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 16px 20px;
+  border-radius: 6px;
+  padding: 14px 20px;
 }
 
 .field {
@@ -587,7 +882,7 @@ td .sub {
 .field .label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--silver);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -599,11 +894,11 @@ td .sub {
   overflow-wrap: anywhere;
 }
 
-/* ------------------------------------------------------------- acceptance */
+/* --------------------------------------------------------------- acceptance */
 
 .accept {
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--deep-space);
   padding: 14px 16px;
   margin-bottom: 10px;
@@ -621,49 +916,67 @@ td .sub {
 
 .accept .detail {
   font-size: 13px;
-  color: var(--silver);
+  color: var(--muted);
   margin-top: 5px;
   max-width: 92ch;
 }
 
 .accept .n {
   font-size: 12px;
-  color: var(--silver);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* ------------------------------------------------------------------- footer */
+/* -------------------------------------------------------------------- notes */
 
-footer.foot {
-  border-top: 1px solid var(--rule);
-  margin-top: 40px;
-  background: var(--midnight);
+.note {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule-soft);
 }
 
-.foot-inner {
-  max-width: var(--shell);
-  margin: 0 auto;
-  padding: 20px 24px 28px;
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  flex-wrap: wrap;
+.note:last-child {
+  border-bottom: none;
+}
+
+.note .who {
   font-size: 12px;
-  color: var(--silver);
+  color: var(--muted);
+  margin-bottom: 4px;
 }
 
-.foot-inner .slogan {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--alabaster);
-  letter-spacing: 0.01em;
+.note .body {
+  font-size: 14px;
+  color: var(--platinum);
+  white-space: pre-wrap;
 }
 
 /* -------------------------------------------------------------------- small */
 
-@media (max-width: 720px) {
-  .masthead-meta {
-    text-align: left;
+@media (max-width: 1000px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .rail-brand,
+  .rail-foot,
+  .rail-group .label {
+    display: none;
+  }
+
+  .rail-group {
+    display: contents;
   }
 
   .accept {

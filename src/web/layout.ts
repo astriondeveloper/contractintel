@@ -1,49 +1,84 @@
 /**
- * Page chrome: masthead, navigation, footer.
+ * The application shell: a fixed left rail, a top bar, and a working surface.
  *
- * Astrion 2026 Brand Evolution. The white logo on Astrion Black is the default
- * treatment, the gradient appears only as the thin rule at the top edge, and the
- * slogan sits in the footer verbatim.
+ * The rail is grouped by what a person is doing rather than by where the data came from.
+ * Sell comes first because that is the job; Intelligence is what you check while doing it;
+ * Reference is looked up rather than worked; System is for the person keeping the thing
+ * honest. A menu ordered by table name would have been easier and would have made the
+ * pipeline the fourth thing anybody saw.
+ *
+ * Astrion 2026 Brand Evolution. The white logo on Midnight, the gradient only as the thin
+ * rule at the top edge, and the slogan in the rail foot verbatim.
  */
 import { html, type Html } from './html.js';
+import type { User } from './auth.js';
 
 export interface NavItem {
   readonly href: string;
   readonly label: string;
+  /** A text glyph rather than an icon font, so nothing is fetched to render the shell. */
+  readonly glyph: string;
 }
 
-/**
- * Every screen in the build. Order is roughly the order the data flows: what was
- * loaded, who it resolved to, what it says, then what still needs a human.
- */
-export const NAV: readonly NavItem[] = [
-  { href: '/', label: 'Overview' },
-  { href: '/upcoming', label: 'Upcoming' },
-  { href: '/entities', label: 'Entities' },
-  { href: '/contracts', label: 'Contract actions' },
-  { href: '/subcontracts', label: 'Subcontracts' },
-  { href: '/customers', label: 'Customers' },
-  { href: '/programs', label: 'Programs' },
-  { href: '/dacis-contracts', label: 'DACIS contracts' },
-  { href: '/taxonomy', label: 'Taxonomy' },
-  { href: '/watchlist', label: 'Watchlist' },
-  { href: '/review', label: 'Review queue' },
-  { href: '/quality', label: 'Data quality' },
-  { href: '/acceptance', label: 'Acceptance' },
+export interface NavGroup {
+  readonly label: string;
+  readonly items: readonly NavItem[];
+}
+
+export const NAV: readonly NavGroup[] = [
+  {
+    label: 'Sell',
+    items: [
+      { href: '/', label: 'Dashboard', glyph: '◧' },
+      { href: '/pipeline', label: 'Pipeline', glyph: '≡' },
+      { href: '/my-work', label: 'My work', glyph: '◆' },
+    ],
+  },
+  {
+    label: 'Intelligence',
+    items: [
+      { href: '/entities', label: 'Companies', glyph: '⬡' },
+      { href: '/contracts', label: 'Contract actions', glyph: '▤' },
+      { href: '/subcontracts', label: 'Teaming', glyph: '⇄' },
+      { href: '/watchlist', label: 'Watchlist', glyph: '◎' },
+    ],
+  },
+  {
+    label: 'Reference',
+    items: [
+      { href: '/customers', label: 'Customers', glyph: '◉' },
+      { href: '/programs', label: 'Programs', glyph: '◈' },
+      { href: '/dacis-contracts', label: 'DACIS contracts', glyph: '▥' },
+      { href: '/taxonomy', label: 'Capabilities', glyph: '⌗' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { href: '/review', label: 'Review queue', glyph: '⚑' },
+      { href: '/quality', label: 'Data quality', glyph: '◐' },
+      { href: '/acceptance', label: 'Acceptance', glyph: '✓' },
+    ],
+  },
 ];
 
+/** Counts shown as a badge beside a rail item, so the queue is visible without opening it. */
+export interface RailBadges {
+  readonly [href: string]: number | undefined;
+}
+
 export interface PageOptions {
-  /** Browser title and the h1 on the page. */
   readonly title: string;
-  /** One or two sentences under the h1 saying what the screen is for. */
   readonly intro?: string;
-  /** Path of the current screen, so the nav can mark itself. */
   readonly path: string;
-  /** Right-hand masthead line. Usually the database state. */
-  readonly meta?: Html;
-  /** Anything above the h1: an empty-database notice, a warning. */
+  /** Buttons and links that act on whatever the page is about. */
+  readonly actions?: Html;
   readonly notice?: Html;
   readonly body: Html;
+  readonly user?: User | null;
+  readonly badges?: RailBadges;
+  /** Right-hand top bar text: the state of the database. */
+  readonly meta?: Html;
 }
 
 function isCurrent(itemHref: string, path: string): boolean {
@@ -51,8 +86,16 @@ function isCurrent(itemHref: string, path: string): boolean {
   return path === itemHref || path.startsWith(`${itemHref}/`);
 }
 
+function initials(user: User): string {
+  const source = user.displayName.trim() || user.principalName;
+  const parts = source.split(/[\s._@-]+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+}
+
 export function page(options: PageOptions): string {
-  const { title, intro, path, meta, notice, body } = options;
+  const { title, intro, path, actions, notice, body, user, badges, meta } = options;
 
   const document = html`<!doctype html>
 <html lang="en">
@@ -65,44 +108,62 @@ export function page(options: PageOptions): string {
 <meta name="robots" content="noindex, nofollow">
 </head>
 <body>
-<header class="masthead">
-  <div class="masthead-inner">
-    <div class="brand">
+<div class="app">
+  <nav class="rail" aria-label="Sections">
+    <div class="rail-brand">
       <img src="/astrion-logo-white.png" alt="Astrion">
-      <div class="brand-divider"></div>
-      <div>
-        <div class="brand-title">Contract Intelligence + Integration Engine</div>
-        <div class="brand-sub">Phase 1 · Data foundation</div>
-      </div>
+      <div class="product">Contract Intelligence</div>
     </div>
-    <div class="masthead-meta">${meta ?? ''}</div>
-  </div>
-  <nav class="nav">
     ${NAV.map(
-      (item) => html`<a href="${item.href}"${isCurrent(item.href, path) ? html` class="current"` : ''}>${item.label}</a>`,
+      (group) => html`<div class="rail-group">
+        <div class="label">${group.label}</div>
+        ${group.items.map((item) => {
+          const badge = badges?.[item.href];
+          return html`<a href="${item.href}"${isCurrent(item.href, path) ? html` class="current"` : ''}
+            ><span class="glyph" aria-hidden="true">${item.glyph}</span>${item.label}${badge !== undefined &&
+            badge > 0
+              ? html`<span class="badge">${badge}</span>`
+              : ''}</a
+          >`;
+        })}
+      </div>`,
     )}
-  </nav>
-</header>
-<main>
-  ${notice ?? ''}
-  <div class="page-head">
-    <h1>${title}</h1>
-    ${intro ? html`<p>${intro}</p>` : ''}
-  </div>
-  ${body}
-</main>
-<footer class="foot">
-  <div class="foot-inner">
-    <div>
+    <div class="rail-foot">
       <div class="slogan">Defend This World. Build the Next.</div>
-      <div>Read only. This interface never writes to the database.</div>
+      <div>Built to <code>CIE_Build_Spec_v1.0</code></div>
     </div>
-    <div>
-      Built to <code>CIE_Build_Spec_v1.0</code>. Departures are recorded in
-      <code>docs/DECISIONS.md</code>.
-    </div>
+  </nav>
+
+  <div class="surface">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <form class="find" method="get" action="/pipeline" role="search">
+          <input type="search" name="q" placeholder="Search the pipeline: title, solicitation, PIID, agency" aria-label="Search the pipeline">
+          <button type="submit">Search</button>
+        </form>
+        <div class="who">
+          ${meta ? html`<span class="state-pill">${meta}</span>` : ''}
+          ${user
+            ? html`<span class="avatar" title="${user.principalName}">${initials(user)}</span
+                ><span>${user.displayName}</span>`
+            : html`<span class="state-pill">Read only · not signed in</span>`}
+        </div>
+      </div>
+    </header>
+
+    <main>
+      ${notice ?? ''}
+      <div class="page-head">
+        <div>
+          <h1>${title}</h1>
+          ${intro ? html`<p>${intro}</p>` : ''}
+        </div>
+        ${actions ? html`<div class="actions">${actions}</div>` : ''}
+      </div>
+      ${body}
+    </main>
   </div>
-</footer>
+</div>
 </body>
 </html>`;
 
