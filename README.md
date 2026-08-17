@@ -15,13 +15,13 @@ built, so signals are ordered by date and value rather than ranked.
 
 | | |
 |---|---|
-| Schema | 40 tables, 19 views, 19 migrations |
+| Schema | 42 tables, 21 views, 20 migrations |
 | Loaders | FPDS transactions, FPDS subcontract edges, DACIS customers, programs, contracts |
 | Loaded | 22,624 contract actions, 4,042 subcontract edges, 854 customers, 74 programs, 213 DACIS contracts |
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
-| Signals | Recompete detection over the corpus, writing `pursuit` rows on a monthly rhythm |
+| Signals | Recompetes from the corpus, and targeted SAM.gov notices from sources sought through solicitation |
 | Interface | Thirteen read-only screens, server rendered, no client bundle |
-| Tests | 177, against a real PostgreSQL 16 |
+| Tests | 200, against a real PostgreSQL 16 |
 | Acceptance tests | 6 of 12 pass, 0 fail, 6 blocked, each naming what it waits for |
 
 `npm run accept` prints the current state of all twelve. **Blocked** means a test names its
@@ -69,7 +69,7 @@ button that quietly bypasses it.
 | Screen | What it answers |
 |---|---|
 | Overview | What is loaded, how it resolved, when each source last landed |
-| Upcoming | Contracts inside the recompete window, soonest first, with the position Astrion holds on each |
+| Upcoming | The pipeline: solicitations open now, recompetes coming, and work early enough to shape |
 | Entities | One row per resolved company; the detail screen lists every spelling it answers to |
 | Contract actions | The FPDS corpus, with the vendor string as filed beside the entity it resolved to |
 | Subcontracts | Prime-to-sub edges, and which side Astrion is on |
@@ -85,14 +85,39 @@ button that quietly bypasses it.
 
 ## Detecting signals
 
+Two sources feed the pipeline, and both write `pursuit` rows.
+
 ```bash
-npm run signals -- --dry-run    # work it out, write nothing
+npm run signals -- --dry-run    # recompetes from the corpus, writing nothing
 npm run signals                 # detect and write
+
+npm run profile                 # build the targeting profile, once per corpus load
+npm run load:sam -- --dry-run   # search SAM.gov, writing nothing
+npm run load:sam                # fetch and write
 ```
 
-Contracts ending inside the recompete window become `pursuit` rows, each carrying the
-position Astrion holds on it: prime incumbent, subcontractor, or none. Three different
-plays, and the `/upcoming` screen groups by that rather than ranking across it.
+**Recompetes** come from the corpus. Contracts ending inside the window become signals,
+each carrying the position Astrion holds on it: prime incumbent, subcontractor, or none.
+Three different plays, and `/upcoming` groups by that rather than ranking across it.
+
+**SAM.gov notices** are targeted rather than swept. `npm run profile` builds
+`opportunity_profile` from the capability taxonomy crosswalks and from the codes the corpus
+shows Astrion working under, and the search asks for those codes and nothing else. Each
+notice records which profile rows pulled it in, so "why is this in my pipeline" has an
+answer.
+
+The notice type decides how early the work is, which is why the search is not limited to
+things closing soon:
+
+| Notice type | Becomes |
+|---|---|
+| Sources sought, special notice, intent to bundle | `shaping_target` — early enough to shape |
+| Presolicitation, solicitation, combined synopsis | `active_solicitation` — out now |
+| Award notice, with `--include-awards` | `market_movement` — competitive intelligence |
+
+`SAM_API_KEY` comes from api.data.gov, registered for the Opportunities API. It is read from
+the environment and never written to the database; a test asserts it never reaches an
+archived payload.
 
 The window is not a constant in the code. It lives in `signal_class_threshold`, which BD Ops
 owns per spec section 13, seeded at 12 to 36 months from spec section 9. `rhythm` on the same
@@ -128,7 +153,7 @@ anything it does not recognise. Every loader is idempotent.
 |---|---|
 | `CIE_Build_Spec_v1.0.md` | The specification. It wins. |
 | `CIE_Phase1_Status.md` | What is built, what the corpus actually said, what is not done. **Not in this repository** — it records findings about real contracts, so it lives with the specification. |
-| `docs/DECISIONS.md` | Fourteen decisions where this departs from the spec, each with the measurement that forced it. |
+| `docs/DECISIONS.md` | Fifteen decisions where this departs from the spec, each with the measurement that forced it. |
 | `docs/BACKLOG.md` | Remaining phases, in dependency order, sized, with the traps in each. |
 | `docs/DEPLOY.md` | Running the interface locally, and putting it on Azure Container Apps. |
 | `docs/GITHUB_SETUP.md` | One-time checklist for putting this on GitHub. |

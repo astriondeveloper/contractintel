@@ -10,9 +10,9 @@ git clone <repo-url> cie && cd cie
 cp .env.example .env
 docker compose up -d db          # PostgreSQL 16
 npm install
-npm run migrate                  # 18 forward-only SQL migrations
+npm run migrate                  # 20 forward-only SQL migrations
 npm run seed                     # the authored seed files, if you have them locally
-npm test                         # 164 tests, on the synthetic seeds in tests/seed/
+npm test                         # 200 tests, on the synthetic seeds in tests/seed/
 npm run accept                   # the twelve acceptance tests from spec section 18
 npm run web                      # the interface, http://localhost:3000
 ```
@@ -96,6 +96,26 @@ Styling follows the Astrion 2026 Brand Evolution: dark first, Astrion Black behi
 Deep Space cards, Alabaster type, Astrion Sky for anything interactive, and the three-stop
 gradient only as the thin rule at the top edge.
 
+## Working on the SAM.gov loader
+
+`loadSamOpportunities` takes its HTTP call as a parameter, so the tests hand it recorded
+pages and never touch the network or need a key. That is also how to develop against it:
+point `SAM_API_BASE` at a local stub and `SAM_API_KEY` at anything.
+
+Two properties are load bearing and both are tested.
+
+**The search is targeted.** It asks only for codes on `opportunity_profile`, and it refuses
+to run at all when the profile is empty rather than falling back to searching for
+everything. A test asserts that every code the loader asks for is on the profile.
+
+**The key never lands in the database.** `source_version` archives the whole notice, so a
+test asserts the key does not appear in any archived payload.
+
+If you add a notice type, add it to `NOTICE_TYPES` with the signal class it maps to.
+`classify` returns null for anything it does not know and the loader counts those and skips
+them, so a new SAM.gov type shows up as a number to look at rather than being filed under
+whatever is nearest.
+
 ## Before you open a pull request
 
 ```bash
@@ -115,7 +135,7 @@ is not a thing you can do; add another one. This is deliberate and CI enforces i
 applying migrations twice.
 
 **There are no mocks.** Tests run against a real PostgreSQL because the schema *is* the
-design — 18 SQL files, no ORM. Several of the defects found so far were in SQL that a
+design — 20 SQL files, no ORM. Several of the defects found so far were in SQL that a
 mocked test would have declared healthy. `tests/fixtures/README.md` explains why fixtures
 are generated at run time rather than committed.
 

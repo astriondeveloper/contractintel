@@ -617,11 +617,23 @@ export interface UpcomingRow {
   readonly agency_label: string | null;
   readonly state: string;
   readonly owner: string | null;
+  readonly notice_type: string | null;
+  readonly response_date: Date | null;
+  readonly posted_date: Date | null;
+  readonly naics_code: string | null;
+  readonly psc_code: string | null;
+  readonly set_aside_code: string | null;
+  readonly notice_url: string | null;
+  readonly solicitation_number: string | null;
 }
 
 const UPCOMING_FILTER = `
-  p.signal_class = 'recompete_window'
+  p.signal_class <> 'market_movement'
+  and ($3 = '' or p.signal_class = $3)
   and ($1 = '' or p.title ilike '%' || $1 || '%'
+               or p.solicitation_number ilike '%' || $1 || '%'
+               or p.naics_code ilike '%' || $1 || '%'
+               or p.psc_code ilike '%' || $1 || '%'
                or p.related_piid ilike '%' || $1 || '%'
                or p.agency_code ilike '%' || $1 || '%'
                or e.canonical_name ilike '%' || $1 || '%')
@@ -630,6 +642,7 @@ const UPCOMING_FILTER = `
 export function upcomingSignals(
   search: string,
   position: string,
+  signalClass: string,
   limit: number,
   offset: number,
 ): Promise<Page<UpcomingRow>> {
@@ -638,19 +651,24 @@ export function upcomingSignals(
             p.expected_solicitation_fy, p.estimated_value::text, p.astrion_position,
             p.incumbent_entity_id::text, e.canonical_name as incumbent_name,
             p.incumbent_confidence, p.agency_code, al.label as agency_label,
-            p.state, p.owner
+            p.state, p.owner, p.notice_type, p.response_date, p.posted_date,
+            p.naics_code, p.psc_code, p.set_aside_code, p.notice_url, p.solicitation_number
        from pursuit p
        left join entity e on e.entity_id = p.incumbent_entity_id
        left join code_label_current al
               on al.code_type = 'agency' and al.code_value = p.agency_code
       where ${UPCOMING_FILTER}
-      order by p.period_end_date asc nulls last, p.estimated_value desc nulls last, p.pursuit_id
-      limit $3 offset $4`,
+      -- Whichever date this signal is actually timed against. A solicitation is timed by
+      -- its response deadline and a recompete by the end of the period of performance, and
+      -- ordering on one of them alone buries the other class at the bottom of the list.
+      order by coalesce(p.response_date, p.period_end_date) asc nulls last,
+               p.estimated_value desc nulls last, p.pursuit_id
+      limit $4 offset $5`,
     `select count(*)::text as n
        from pursuit p
        left join entity e on e.entity_id = p.incumbent_entity_id
       where ${UPCOMING_FILTER}`,
-    [search, position],
+    [search, position, signalClass],
     limit,
     offset,
   );
@@ -664,6 +682,9 @@ export interface UpcomingSummary {
   readonly without_value: number;
   readonly estimated_value: string | null;
   readonly detected_at: Date | null;
+  readonly recompete_window: number;
+  readonly active_solicitation: number;
+  readonly shaping_target: number;
 }
 
 export async function upcomingSummary(): Promise<UpcomingSummary> {
@@ -675,6 +696,9 @@ export async function upcomingSummary(): Promise<UpcomingSummary> {
     without_value: string;
     estimated_value: string | null;
     detected_at: Date | null;
+    recompete_window: string;
+    active_solicitation: string;
+    shaping_target: string;
   }>(
     `select count(*)::text                                                          as total,
             count(*) filter (where astrion_position = 'prime_incumbent')::text      as prime_incumbent,
@@ -682,9 +706,12 @@ export async function upcomingSummary(): Promise<UpcomingSummary> {
             count(*) filter (where astrion_position = 'none')::text                 as none,
             count(*) filter (where estimated_value is null)::text                   as without_value,
             sum(estimated_value)::text                                              as estimated_value,
+            count(*) filter (where signal_class = 'recompete_window')::text          as recompete_window,
+            count(*) filter (where signal_class = 'active_solicitation')::text       as active_solicitation,
+            count(*) filter (where signal_class = 'shaping_target')::text            as shaping_target,
             max(generated_at)                                                       as detected_at
        from pursuit
-      where signal_class = 'recompete_window'`,
+      where signal_class <> 'market_movement'`,
   );
   return {
     total: Number(row!.total),
@@ -694,6 +721,9 @@ export async function upcomingSummary(): Promise<UpcomingSummary> {
     without_value: Number(row!.without_value),
     estimated_value: row!.estimated_value,
     detected_at: row!.detected_at,
+    recompete_window: Number(row!.recompete_window),
+    active_solicitation: Number(row!.active_solicitation),
+    shaping_target: Number(row!.shaping_target),
   };
 }
 

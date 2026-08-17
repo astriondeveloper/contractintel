@@ -21,7 +21,9 @@
     "web": "tsx src/web/server.ts",
     "web:dev": "tsx watch src/web/server.ts",
     "demo": "tsx scripts/build-demo.ts",
-    "signals": "tsx src/signals/run-signals.ts"
+    "signals": "tsx src/signals/run-signals.ts",
+    "profile": "tsx src/signals/run-profile.ts",
+    "load:sam": "tsx src/loaders/run-sam.ts"
   },
   "dependencies": {
     "csv-parse": "^5.5.6",

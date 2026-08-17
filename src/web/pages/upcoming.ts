@@ -51,12 +51,26 @@ function urgency(endsOn: Date | string | null): ReturnType<typeof chip> | string
   return chip('neutral', 'Over 2 years');
 }
 
+const CLASS_LABEL: Record<string, string> = {
+  active_solicitation: 'Out now',
+  recompete_window: 'Recompete',
+  shaping_target: 'Shaping',
+};
+
+function classChip(signalClass: string | null) {
+  if (signalClass === 'active_solicitation') return chip('fail', 'Out now');
+  if (signalClass === 'recompete_window') return chip('blocked', 'Recompete');
+  if (signalClass === 'shaping_target') return chip('sky', 'Shaping');
+  return ABSENT;
+}
+
 export async function upcoming(ctx: Ctx): Promise<string> {
   const search = text(ctx.url, 'q');
   const position = text(ctx.url, 'position');
+  const signalClass = text(ctx.url, 'class');
 
   const [result, summary, thresholds] = await Promise.all([
-    upcomingSignals(search, position, PAGE_SIZE, offset(ctx.url)),
+    upcomingSignals(search, position, signalClass, PAGE_SIZE, offset(ctx.url)),
     upcomingSummary(),
     signalThresholds(),
   ]);
@@ -64,26 +78,41 @@ export async function upcoming(ctx: Ctx): Promise<string> {
   const recompete = thresholds.find((t) => t.signal_class === 'recompete_window');
   const detected = summary.detected_at;
 
-  const positionLinks = html`<div class="search">
-    ${[
-      { value: '', label: 'Every position' },
-      { value: 'prime_incumbent', label: POSITION_LABEL.prime_incumbent! },
-      { value: 'subcontractor', label: POSITION_LABEL.subcontractor! },
-      { value: 'none', label: POSITION_LABEL.none! },
-    ].map((option) => {
-      const url = new URL(ctx.url);
-      url.searchParams.delete('page');
-      if (option.value) url.searchParams.set('position', option.value);
-      else url.searchParams.delete('position');
-      const current = position === option.value;
-      return html`<a
-        class="clear"
-        href="${url.pathname}${url.search}"
-        style="${current ? 'color:var(--alabaster);font-weight:600' : ''}"
-        >${option.label}</a
-      >`;
-    })}
-  </div>`;
+  /** A row of filter links that keeps every other filter in the URL. */
+  const filterLinks = (
+    param: string,
+    current: string,
+    options: readonly { value: string; label: string }[],
+  ) =>
+    html`<div class="search">
+      ${options.map((option) => {
+        const url = new URL(ctx.url);
+        url.searchParams.delete('page');
+        if (option.value) url.searchParams.set(param, option.value);
+        else url.searchParams.delete(param);
+        const isCurrent = current === option.value;
+        return html`<a
+          class="clear"
+          href="${url.pathname}${url.search}"
+          style="${isCurrent ? 'color:var(--alabaster);font-weight:600' : ''}"
+          >${option.label}</a
+        >`;
+      })}
+    </div>`;
+
+  const classLinks = filterLinks('class', signalClass, [
+    { value: '', label: 'Every stage' },
+    { value: 'active_solicitation', label: `${CLASS_LABEL.active_solicitation!} (${count(summary.active_solicitation)})` },
+    { value: 'recompete_window', label: `${CLASS_LABEL.recompete_window!} (${count(summary.recompete_window)})` },
+    { value: 'shaping_target', label: `${CLASS_LABEL.shaping_target!} (${count(summary.shaping_target)})` },
+  ]);
+
+  const positionLinks = filterLinks('position', position, [
+    { value: '', label: 'Every position' },
+    { value: 'prime_incumbent', label: POSITION_LABEL.prime_incumbent! },
+    { value: 'subcontractor', label: POSITION_LABEL.subcontractor! },
+    { value: 'none', label: POSITION_LABEL.none! },
+  ]);
 
   const body = html`
     ${summary.total === 0
@@ -97,24 +126,28 @@ export async function upcoming(ctx: Ctx): Promise<string> {
       : ''}
     ${tiles([
       {
-        label: 'Signals in the window',
+        label: 'In the pipeline',
         value: count(summary.total),
+        foot: 'Every stage, soonest first',
+      },
+      {
+        label: 'Out now',
+        value: count(summary.active_solicitation),
+        foot: 'Solicitations open for response',
+      },
+      {
+        label: 'Recompete',
+        value: count(summary.recompete_window),
         foot:
           recompete
-            ? `Contracts ending ${recompete.horizon_months_from} to ${recompete.horizon_months_to} months out`
+            ? `Ending ${recompete.horizon_months_from} to ${recompete.horizon_months_to} months out`
             : undefined,
       },
       {
-        label: 'We hold as prime',
-        value: count(summary.prime_incumbent),
-        foot: 'Defend',
+        label: 'Shaping',
+        value: count(summary.shaping_target),
+        foot: 'Sources sought and special notices',
       },
-      {
-        label: 'We sub on',
-        value: count(summary.subcontractor),
-        foot: 'A position to build on',
-      },
-      { label: 'No position', value: count(summary.none), foot: 'Take' },
       {
         label: 'Value in the window',
         value: usdCompact(summary.estimated_value),
@@ -123,27 +156,51 @@ export async function upcoming(ctx: Ctx): Promise<string> {
       {
         label: 'Last detection',
         value: detected === null ? ABSENT : since(detected),
-        foot: recompete ? `Rhythm: ${recompete.rhythm}` : undefined,
+        // Each class has its own rhythm in signal_class_threshold -- daily for a
+        // solicitation, monthly for a recompete -- so naming one of them here would be
+        // wrong about the others.
+        foot: thresholds.length > 0 ? 'Each stage runs on its own rhythm' : undefined,
       },
     ])}
     ${section(
-      'Ordered by when the contract ends',
+      'Ordered by when it matters',
       html`${searchForm('/upcoming', [
-          { name: 'q', placeholder: 'Title, PIID, agency or incumbent', value: search },
+          {
+            name: 'q',
+            placeholder: 'Title, solicitation, PIID, NAICS, PSC, agency or incumbent',
+            value: search,
+          },
         ])}
+        ${classLinks}
         ${positionLinks}
         ${table({
           columns: [
+            { header: 'Stage', cell: (r) => classChip(r.signal_class) },
             {
-              header: 'Ends',
+              // A solicitation is timed by its response deadline and a recompete by the
+              // end of the period of performance. Showing one column labelled for the
+              // other would be wrong on half the rows, so the column says which it is.
+              header: 'When',
               cell: (r) =>
-                html`${day(r.period_end_date)}<span class="sub">${urgency(r.period_end_date)}</span>`,
+                r.response_date !== null
+                  ? html`${day(r.response_date)}<span class="sub">responses due</span>`
+                  : r.period_end_date !== null
+                    ? html`${day(r.period_end_date)}<span class="sub">${urgency(r.period_end_date)}</span>`
+                    : html`${ABSENT}<span class="sub">no date given</span>`,
             },
             {
-              header: 'Contract',
+              header: 'Opportunity',
               cell: (r) =>
-                html`${truncate(r.title, 68)}
-                  ${r.related_piid ? html`<span class="sub"><code>${r.related_piid}</code></span>` : ''}`,
+                html`${r.notice_url
+                    ? html`<a href="${r.notice_url}" rel="noreferrer">${truncate(r.title, 66)}</a>`
+                    : truncate(r.title, 66)}
+                  <span class="sub"
+                    >${r.solicitation_number
+                      ? html`<code>${r.solicitation_number}</code>`
+                      : r.related_piid
+                        ? html`<code>${r.related_piid}</code>`
+                        : ''}${r.notice_type ? html` · ${r.notice_type}` : ''}</span
+                  >`,
             },
             {
               header: 'Incumbent',
@@ -158,9 +215,14 @@ export async function upcoming(ctx: Ctx): Promise<string> {
             { header: 'Position', cell: (r) => positionChip(r.astrion_position) },
             { header: 'Value', align: 'num', cell: (r) => usd(r.estimated_value) },
             {
-              header: 'Solicits',
-              align: 'num',
-              cell: (r) => (r.expected_solicitation_fy === null ? ABSENT : `FY${r.expected_solicitation_fy}`),
+              header: 'Codes',
+              cell: (r) =>
+                r.naics_code || r.psc_code
+                  ? html`<code>${[r.naics_code, r.psc_code].filter(Boolean).join(' · ')}</code>
+                      ${r.set_aside_code ? html`<span class="sub">${r.set_aside_code}</span>` : ''}`
+                  : r.expected_solicitation_fy === null
+                    ? ABSENT
+                    : html`<span class="sub">solicits FY${r.expected_solicitation_fy}</span>`,
             },
             { header: 'Agency', cell: (r) => truncate(r.agency_label ?? r.agency_code, 26) },
             {
@@ -188,16 +250,17 @@ export async function upcoming(ctx: Ctx): Promise<string> {
           total: result.total,
           baseQuery: baseQuery(ctx.url),
         })}`,
-      'Soonest first. A blank value is unknown, never zero',
+      'A solicitation by its response date, a recompete by when the contract ends',
     )}
   `;
 
   return screen(ctx, {
     title: 'Upcoming',
     intro:
-      'Contracts inside the recompete window, soonest first. Position is what Astrion holds on the ' +
-      'contract today, not a judgement about whether to bid: ranking these against each other is the ' +
-      'scoring engine’s job and it is not built yet.',
+      'Everything in front of business development, soonest first: solicitations open now, contracts ' +
+      'coming up for recompete, and work still early enough to shape. Position is what Astrion holds ' +
+      'today, not a judgement about whether to bid — ranking these against each other is the scoring ' +
+      'engine’s job and it is not built yet.',
     body,
     suppressEmptyNotice: true,
   });
@@ -206,7 +269,7 @@ export async function upcoming(ctx: Ctx): Promise<string> {
 /** The same list as JSON, so a scheduled digest can be built without scraping. */
 export async function upcomingJson(): Promise<unknown> {
   const [result, summary] = await Promise.all([
-    upcomingSignals('', '', 500, 0),
+    upcomingSignals('', '', '', 500, 0),
     upcomingSummary(),
   ]);
   return { summary, signals: result.rows, returned: result.rows.length, total: result.total };

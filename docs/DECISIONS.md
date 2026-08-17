@@ -355,6 +355,49 @@ to certainty needs the reconciliation in backlog item 8.
 
 ---
 
+## D15. The SAM.gov search is targeted by the profile, and refuses to run without one
+
+**The brief**: opportunities that fit the company, looking further out than a solicitation
+window. Both halves of that are decisions rather than settings.
+
+**Targeting.** SAM.gov publishes every federal notice, and a feed nobody has curated is a
+feed nobody reads. `opportunity_profile` is the curation, and it is built rather than
+authored from nothing:
+
+- **The taxonomy side** is `node_crosswalk`, which already carries the PSC, NAICS and agency
+  crosswalk of every capability node from `capability_taxonomy_seed.csv`. That is BD's own
+  statement of what the company does, expressed in exactly the codes SAM.gov filters on. It
+  includes work the company wants and does not yet hold.
+- **The corpus side** is the NAICS and PSC codes on Astrion's own contract actions and the
+  agencies that awarded them, scoped through the entity rollup. It is evidence rather than
+  intent, and it catches work the taxonomy has not caught up with.
+
+A code that appears in both is a stronger statement than a code in either, so both rows are
+kept and `opportunity_profile_effective` collapses them for the search. Five actions is the
+floor on the observed side: below that a code is as likely to be a mis-coded transaction as
+a line of business.
+
+**The loader refuses to run when the profile is empty** rather than falling back to
+searching for everything. A quiet fallback to the firehose is the failure mode this feature
+exists to prevent, and it would be discovered only by the person reading the resulting list.
+
+**Looking further out.** Restricting to notices closing in the next six months finds only
+work that is already too late to shape. The notice type is the field that carries how early
+a thing is, so it is kept raw and it sets the signal class: sources sought, special notice
+and intent to bundle become `shaping_target`; presolicitation, solicitation and combined
+synopsis become `active_solicitation`; award notices become `market_movement` and are
+opt-in, being the highest-volume type and about work that is finished. An unrecognised type
+is counted and skipped rather than guessed at.
+
+**What remains a judgement call.** The profile searches on NAICS and PSC only, because
+those are the codes the v2 endpoint filters on (`ncode`, `ccode`). Agency and set-aside are
+collected for the score model's gates instead. One request per code per run means the
+profile's size is the API bill: 25 codes is 25 requests, and a public key's daily quota is
+finite. `--max-requests` caps it and the run says when it stopped early, because a
+silently incomplete pipeline is worse than a short one.
+
+---
+
 ## Open questions
 
 **Gate B — is the GovWin API available?** Owner: Gavin.
