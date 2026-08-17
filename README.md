@@ -39,10 +39,15 @@ projects what is coming, and the interface is a personal feed over all of it.
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
 | Interface | Seventeen screens, server rendered, no client bundle, three write endpoints |
 | Tests | 315, against a real PostgreSQL 16 |
-| Acceptance tests | 9 of 12 pass, 0 fail, 3 blocked, each naming what it waits for |
+| Acceptance tests | 10 of 12 pass, 0 fail, 2 blocked, both on campaign sizing |
 
 `npm run accept` prints the current state of all twelve. **Blocked** means a test names its
 dependency; a **FAIL** is a real problem and CI treats it as one.
+
+Six of the twelve read the corpus, so on a fresh clone they report blocked rather than passing
+and the count is 4 of 12. That is the honest reading of an empty database and not a regression:
+load a corpus and they run. The two that stay blocked either way are 9 and 10, which need
+campaign sizing — `docs/BACKLOG.md` item 4.
 
 ## Start here
 
