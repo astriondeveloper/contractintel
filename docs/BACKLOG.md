@@ -131,9 +131,19 @@ pipeline source in the corpus that predates a solicitation.
 
 ---
 
-## 5. Interface — spec sections 14 and 15 — large
+## 5. Interface — spec sections 14 and 15 — large — **built**
 
-**Unblocks acceptance tests 11 and 12.**
+**Acceptance tests 11 and 12 pass.** `src/web/`, `npm run web`, and seventeen screens. Reworked
+from a pipeline into a personal feed: `docs/DECISIONS.md` **D17** records why the ownership model
+went and what replaced it, **D18** why `sent` is the only metric that counts, and **D21** what the
+hand-off panel is for.
+
+Still open from this item: the digest. Nothing reaches anybody until they sign in, which with 20-odd
+occasional users is the main risk to any of this being used. See item 9.
+
+The original entry follows, because the traps it names are still the traps.
+
+---
 
 **Watch out for:**
 
@@ -181,7 +191,64 @@ competimates the seed file hid; this makes that repeatable.
 
 ---
 
-## 8. Reconcile the DACIS and FPDS views of the same contract — medium, speculative
+## 8. Forecast: deepen the evidence behind a lead time — small, ongoing
+
+**Not blocking anything.** `docs/DECISIONS.md` **D19** and **D20** describe the forecast as built
+and are honest about where it is weakest: on a corpus that does not reach back far enough, every
+lead time is the 365-day assumption and the confidence bands separate on nothing.
+
+Three things make it better without a line of code changing:
+
+- **Let SAM.gov run.** `office_notice_lag` measures the days between a notice being posted and the
+  award being signed, from solicitation numbers that appear in both sources. Coverage starts when
+  this system started looking, so it grows on its own. Each office that crosses three matched
+  notices moves its projections from assumed to measured.
+- **Load FPDS further back.** `cie_followon_chain_asof` needs to have seen an office re-let the same
+  PSC three times before it will infer a rhythm. On a five-year cadence that is fifteen years of
+  history.
+- **Run the backtest as a sweep, not once.** `npm run forecast:backtest -- --sweep 2019,2020,2021,2022`
+  is the difference between a number and an anecdote. If high confidence does not beat low across a
+  sweep, the banding is decoration and the screen should say so.
+
+**The one code change worth making** is a measured vehicle lead time. A vehicle replacement is
+competed on-ramp by on-ramp and starts earlier than a single follow-on, and nothing in this corpus
+measures how much earlier, so the projection uses the contract lead time and records the shortfall
+as evidence against itself. A handful of observed vehicle replacements would replace that apology
+with a figure.
+
+**Verified by** `select lead_source, count(*) from forecast_item group by lead_source;` showing
+something other than `default`, and a sweep in which the bands separate.
+
+---
+
+## 9. The digest — small, and the highest-value thing left
+
+**Explicitly out of scope for this build**, and worth writing down as the next thing rather than as
+a closed question.
+
+In-app only was the right call: a notification nobody asked for trains people to ignore
+notifications. But nothing here reaches anybody until they sign in, and with 20-odd people checking
+occasionally that is the main risk to any of it being used. The feed can be perfect and unread.
+
+What exists already: `/api/feed`, `/api/forecast` and `/api/handoffs` return the same numbers the
+screens do, and `feed_watermark` knows what each person has and has not seen. What is missing is a
+per-person render and a delivery path.
+
+**Watch out for:**
+
+- **A digest is per person, and the JSON endpoints are not.** `/api/feed` is scoped to nobody,
+  deliberately, because an unauthenticated endpoint that returned one person's patch would be an
+  authorisation bug. A digest job runs as itself and reads each principal's follows.
+- **Send nothing when there is nothing.** An empty digest every Monday is how a digest gets
+  filtered. Most weeks in most patches are quiet and that is the normal state.
+- **The subject line is the product.** "3 new in your patch: two recompetes at EXAMPLE RANGE
+  OPERATIONS and one sources sought" is read. "Your weekly Contract Intelligence digest" is not.
+- **Do not move the read mark.** A digest is a copy, not a visit. Marking things read because an
+  email was generated would empty the feed people came to read.
+
+---
+
+## 10. Reconcile the DACIS and FPDS views of the same contract — medium, speculative
 
 `dacis_contract.contract_number` and `contract_action.piid` describe the same awards from two
 sources with different grain: 213 DACIS contracts against 22,624 FPDS transactions. DACIS
@@ -196,6 +263,15 @@ is worth a plan.
 ---
 
 ## Not planned
+
+**TechnoMile integration.** Copy and paste, by hand, deliberately. `docs/DECISIONS.md` **D21**.
+
+**Ownership, funnel states, capacity and win probability.** They live in TechnoMile and this feeds
+it. **D17**.
+
+**Shaping records.** Contacts, meetings, white papers, capture plans, gate reviews. Explicitly not
+this tool's job. A per-requirement note stays, because a note saying "called the office, the RFP has
+slipped to Q3" is intel rather than a shaping record, and it is not meant to grow into one.
 
 **A scoring factor from `Other Bidders`.** 6 percent coverage. See `docs/DECISIONS.md` D8.
 

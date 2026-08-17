@@ -25,15 +25,17 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { closePool } from '../src/db/index.js';
-import { databaseState, entities, upcomingSignals } from '../src/web/queries.js';
+import { databaseState, entities, feed, forecastItems, watermarkFor } from '../src/web/queries.js';
 import type { Ctx } from '../src/web/shell.js';
 import { escape } from '../src/web/html.js';
 import { NAV } from '../src/web/layout.js';
 
 import { overview } from '../src/web/pages/overview.js';
 import { dashboard } from '../src/web/pages/dashboard.js';
-import { pipelineScreen } from '../src/web/pages/pipeline.js';
-import { pursuit } from '../src/web/pages/pursuit.js';
+import { feedScreen } from '../src/web/pages/feed.js';
+import { forecast, forecastDetail } from '../src/web/pages/forecast.js';
+import { handoffs } from '../src/web/pages/handoffs.js';
+import { requirement } from '../src/web/pages/requirement.js';
 import { entityDetail, entityList } from '../src/web/pages/entities.js';
 import { contracts } from '../src/web/pages/contracts.js';
 import { subcontracts } from '../src/web/pages/subcontracts.js';
@@ -58,9 +60,11 @@ interface Screen {
 
 const SCREENS: readonly Screen[] = [
   { key: 'dashboard', label: 'Dashboard', path: '/', render: dashboard },
-  { key: 'pipeline', label: 'Pipeline', path: '/pipeline', render: pipelineScreen },
-  // "My work" is the pipeline filtered to the signed-in person, and a snapshot has no
-  // signed-in person, so it is not carried. The rail link falls back to the pipeline.
+  { key: 'feed', label: 'Feed', path: '/feed', render: feedScreen },
+  { key: 'forecast', label: 'Forecast', path: '/forecast', render: forecast },
+  { key: 'handoffs', label: 'Hand-offs', path: '/handoffs', render: handoffs },
+  // Follows belongs to a person and a snapshot has no signed-in person, so it is not carried.
+  // The rail link falls back to the feed, which is where a follow would take effect.
   { key: 'overview', label: 'Corpus overview', path: '/overview', render: overview },
   { key: 'entities', label: 'Entities', path: '/entities', render: entityList },
   { key: 'contracts', label: 'Contract actions', path: '/contracts', render: contracts },
@@ -78,16 +82,19 @@ const SCREENS: readonly Screen[] = [
 /** How many entity detail screens to carry, so the links out of the list go somewhere. */
 const ENTITY_DETAILS = 24;
 
-/** How many pursuit traces to carry. The trace is the most worth clicking through to. */
-const PURSUIT_DETAILS = 24;
+/** How many requirement screens to carry. The rule trace is the most worth clicking through to. */
+const REQUIREMENT_DETAILS = 24;
+
+/** How many forecast projections to carry, so the bars open onto something. */
+const FORECAST_DETAILS = 16;
 
 /** The screen key a rail href points at, so the rail and the sections agree. */
 function keyFor(href: string): string {
   const screen = SCREENS.find((s) => s.path === href);
   if (screen) return screen.key;
-  // A rail entry the snapshot does not carry -- My work needs a signed-in person -- goes
-  // to the pipeline rather than nowhere.
-  return 'pipeline';
+  // A rail entry the snapshot does not carry -- Follows needs a signed-in person -- goes to the
+  // feed rather than nowhere.
+  return 'feed';
 }
 
 function mainOf(document: string): string {
@@ -106,7 +113,8 @@ function mainOf(document: string): string {
 function rewriteLinks(
   html: string,
   renderedEntities: ReadonlySet<string>,
-  renderedPursuits: ReadonlySet<string>,
+  renderedRequirements: ReadonlySet<string>,
+  renderedForecasts: ReadonlySet<string>,
 ): string {
   return html.replace(/href="\/([^"]*)"/g, (_match, rest: string) => {
     const [pathname = ''] = rest.split('?');
@@ -117,11 +125,20 @@ function rewriteLinks(
       return renderedEntities.has(id) ? `href="#entity-${id}"` : 'href="#entities"';
     }
 
-    const pursuitLink = /^pursuits\/(\d+)$/.exec(pathname);
-    if (pursuitLink) {
-      const id = pursuitLink[1]!;
-      return renderedPursuits.has(id) ? `href="#pursuit-${id}"` : 'href="#pipeline"';
+    const requirementLink = /^requirements\/(\d+)$/.exec(pathname);
+    if (requirementLink) {
+      const id = requirementLink[1]!;
+      return renderedRequirements.has(id) ? `href="#requirement-${id}"` : 'href="#feed"';
     }
+
+    const forecastLink = /^forecast\/(\d+)$/.exec(pathname);
+    if (forecastLink) {
+      const id = forecastLink[1]!;
+      return renderedForecasts.has(id) ? `href="#forecast-${id}"` : 'href="#forecast"';
+    }
+
+    // The spreadsheet export needs a server to assemble the file, so it goes nowhere here.
+    if (pathname === 'export.csv') return 'href="#feed"';
 
     if (pathname === '') return 'href="#dashboard"';
 
@@ -165,11 +182,18 @@ async function main(): Promise<void> {
 
   // The entities the list screen shows first, so its links land somewhere.
   const top = await entities('', '', ENTITY_DETAILS, 0);
-  const renderedEntities = new Set(top.rows.map((row) => row.entity_id));
+  const renderedEntities = new Set<string>(top.rows.map((row) => row.entity_id));
 
-  // The pursuits the Upcoming screen shows first, so its links land somewhere.
-  const topPursuits = await upcomingSignals('', '', '', 'when', PURSUIT_DETAILS, 0);
-  const renderedPursuits = new Set(topPursuits.rows.map((row) => row.pursuit_id));
+  // The requirements the feed shows first, so its links land somewhere. Scoped to nobody, so the
+  // snapshot carries the whole picture rather than an empty patch.
+  const mark = await watermarkFor('');
+  const topRequirements = await feed(
+    '', mark.seen_through, 'everything', '', '', '', 'newest', REQUIREMENT_DETAILS, 0,
+  );
+  const renderedRequirements = new Set<string>(topRequirements.rows.map((row) => row.pursuit_id));
+
+  const topForecasts = await forecastItems('', 'everything', null, null, '', FORECAST_DETAILS, 0);
+  const renderedForecasts = new Set<string>(topForecasts.rows.map((row) => row.forecast_id));
 
   process.stdout.write('Rendering screens\n');
 
@@ -181,7 +205,9 @@ async function main(): Promise<void> {
     bodies.push({
       key: screen.key,
       label: screen.label,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities, renderedPursuits)),
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
     });
     process.stdout.write(`  ${screen.path}\n`);
   }
@@ -193,22 +219,40 @@ async function main(): Promise<void> {
     bodies.push({
       key: `entity-${row.entity_id}`,
       label: null,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities, renderedPursuits)),
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
     });
   }
   process.stdout.write(`  ${top.rows.length} entity detail screen(s)\n`);
 
-  for (const row of topPursuits.rows) {
-    const ctx: Ctx = { url: new URL(`http://demo/pursuits/${row.pursuit_id}`), state, user: null };
-    const rendered = await pursuit(ctx, row.pursuit_id);
+  for (const row of topRequirements.rows) {
+    const ctx: Ctx = { url: new URL(`http://demo/requirements/${row.pursuit_id}`), state, user: null };
+    const rendered = await requirement(ctx, row.pursuit_id);
     if (rendered === null) continue;
     bodies.push({
-      key: `pursuit-${row.pursuit_id}`,
+      key: `requirement-${row.pursuit_id}`,
       label: null,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities, renderedPursuits)),
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
     });
   }
-  process.stdout.write(`  ${topPursuits.rows.length} pursuit trace screen(s)\n`);
+  process.stdout.write(`  ${topRequirements.rows.length} requirement screen(s)\n`);
+
+  for (const row of topForecasts.rows) {
+    const ctx: Ctx = { url: new URL(`http://demo/forecast/${row.forecast_id}`), state, user: null };
+    const rendered = await forecastDetail(ctx, row.forecast_id);
+    if (rendered === null) continue;
+    bodies.push({
+      key: `forecast-${row.forecast_id}`,
+      label: null,
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
+    });
+  }
+  process.stdout.write(`  ${topForecasts.rows.length} projection screen(s)\n`);
 
   // The stylesheet, with the fonts inlined. A published page cannot reach a font CDN and
   // a silent fallback to Arial would break the thing acceptance test 12 is about.
@@ -313,7 +357,8 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
 
     // An entity detail screen keeps Entities marked, since that is where it came from.
     var navKey = key.indexOf('entity-') === 0 ? 'entities'
-      : key.indexOf('pursuit-') === 0 ? 'pipeline'
+      : key.indexOf('requirement-') === 0 ? 'feed'
+      : key.indexOf('forecast-') === 0 ? 'forecast'
       : key;
     navLinks.forEach(function (link) {
       link.classList.toggle('current', link.getAttribute('data-nav') === navKey);

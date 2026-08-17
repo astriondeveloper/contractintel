@@ -950,9 +950,321 @@ button[disabled] {
   white-space: pre-wrap;
 }
 
+/* --------------------------------------------------------------- feed items */
+
+/*
+ * A feed row, which is a different shape from a table row on purpose. The three actions sit on the
+ * row itself: a queue where acting on something means opening it first is a queue where nobody
+ * acts on anything.
+ */
+.feed-list {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--deep-space);
+  overflow: hidden;
+}
+
+.item {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+.item:hover {
+  background: rgba(41, 170, 225, 0.05);
+}
+
+/* Unread carries a Sky edge. The chip says "New" as well: colour alone is not a label. */
+.item.fresh {
+  border-left: 2px solid var(--astrion-sky);
+  padding-left: 14px;
+}
+
+.item-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.item .top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.item .headline {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--alabaster);
+}
+
+.item a.headline:hover {
+  color: var(--astrion-sky);
+  text-decoration: none;
+}
+
+.item .meta {
+  display: flex;
+  gap: 6px 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--silver);
+}
+
+/* Why this row is in this person's feed. Quieter than the row, never absent. */
+.item .why {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.row-actions form {
+  display: inline;
+}
+
+.row-actions input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--astrion-sky);
+}
+
+.bulk {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.bulk .sub {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* A filter button that is the current one. */
+.button.on {
+  border-color: var(--astrion-sky);
+  color: var(--alabaster);
+  background: rgba(41, 170, 225, 0.12);
+}
+
+/* ------------------------------------------------------------------ follows */
+
+.add-follow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.add-follow select,
+.add-follow input[type='text'] {
+  flex: 1 1 320px;
+  max-width: 560px;
+}
+
+.add-follow .sub {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ----------------------------------------------------------------- forecast */
+
+/*
+ * The quarter bars. Stacked by confidence rather than one block per quarter, because the
+ * composition is the interesting part: eleven projections of which one is high confidence is a
+ * different quarter from eleven of which nine are.
+ */
+.quarters {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  overflow-x: auto;
+  padding: 16px 16px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--deep-space);
+}
+
+.quarter {
+  flex: 1 1 84px;
+  min-width: 84px;
+  text-align: center;
+  color: inherit;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.quarter:hover {
+  background: rgba(41, 170, 225, 0.08);
+  text-decoration: none;
+}
+
+/* A quarter whose projected date has already passed: the follow-on should be visible and is not. */
+.quarter.past {
+  opacity: 0.62;
+}
+
+.bar-frame {
+  height: 132px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 8px;
+}
+
+.bar-frame .bar {
+  display: block;
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  min-height: 0;
+}
+
+.bar-frame .bar.high {
+  background: var(--refraction);
+}
+
+.bar-frame .bar.medium {
+  background: var(--supernova);
+}
+
+.bar-frame .bar.low {
+  background: #4a5468;
+}
+
+.quarter-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--platinum);
+  letter-spacing: 0.03em;
+}
+
+.quarter-figure {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--alabaster);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.quarter-value {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.quarter-caveat {
+  font-size: 12px;
+  color: var(--supernova);
+}
+
+/* ----------------------------------------------------------------- hand-off */
+
+/*
+ * The hand-off panel. Two columns on a wide screen, because the field block and the summary are
+ * used at the same moment by the same person and putting one below the other means scrolling
+ * between them.
+ */
+.handoff {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 16px;
+  background: var(--deep-space);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 16px 18px;
+}
+
+.handoff-block h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.handoff-block p {
+  margin-bottom: 8px;
+}
+
+.handoff-block .sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* A read-only box that selects all of itself on click. Monospaced, so the labels line up. */
+textarea.copyable {
+  width: 100%;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--astrion-black);
+  color: var(--platinum);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  cursor: text;
+  resize: vertical;
+}
+
+textarea.copyable:hover {
+  border-color: var(--astrion-sky);
+}
+
+.mark-sent {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 14px 18px;
+  background: var(--midnight);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--refraction);
+  border-radius: 6px;
+}
+
+.mark-sent input[type='text'] {
+  flex: 1 1 340px;
+}
+
+.mark-sent .sub {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* -------------------------------------------------------------------- small */
 
 @media (max-width: 1000px) {
+  .item {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .row-actions {
+    justify-content: flex-start;
+  }
+
   .app {
     grid-template-columns: 1fr;
   }
