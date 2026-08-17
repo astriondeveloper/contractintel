@@ -28,9 +28,11 @@ import { closePool } from '../src/db/index.js';
 import { databaseState, entities, upcomingSignals } from '../src/web/queries.js';
 import type { Ctx } from '../src/web/shell.js';
 import { escape } from '../src/web/html.js';
+import { NAV } from '../src/web/layout.js';
 
 import { overview } from '../src/web/pages/overview.js';
-import { upcoming } from '../src/web/pages/upcoming.js';
+import { dashboard } from '../src/web/pages/dashboard.js';
+import { pipelineScreen } from '../src/web/pages/pipeline.js';
 import { pursuit } from '../src/web/pages/pursuit.js';
 import { entityDetail, entityList } from '../src/web/pages/entities.js';
 import { contracts } from '../src/web/pages/contracts.js';
@@ -55,8 +57,11 @@ interface Screen {
 }
 
 const SCREENS: readonly Screen[] = [
-  { key: 'overview', label: 'Overview', path: '/', render: overview },
-  { key: 'upcoming', label: 'Upcoming', path: '/upcoming', render: upcoming },
+  { key: 'dashboard', label: 'Dashboard', path: '/', render: dashboard },
+  { key: 'pipeline', label: 'Pipeline', path: '/pipeline', render: pipelineScreen },
+  // "My work" is the pipeline filtered to the signed-in person, and a snapshot has no
+  // signed-in person, so it is not carried. The rail link falls back to the pipeline.
+  { key: 'overview', label: 'Corpus overview', path: '/overview', render: overview },
   { key: 'entities', label: 'Entities', path: '/entities', render: entityList },
   { key: 'contracts', label: 'Contract actions', path: '/contracts', render: contracts },
   { key: 'subcontracts', label: 'Subcontracts', path: '/subcontracts', render: subcontracts },
@@ -75,6 +80,15 @@ const ENTITY_DETAILS = 24;
 
 /** How many pursuit traces to carry. The trace is the most worth clicking through to. */
 const PURSUIT_DETAILS = 24;
+
+/** The screen key a rail href points at, so the rail and the sections agree. */
+function keyFor(href: string): string {
+  const screen = SCREENS.find((s) => s.path === href);
+  if (screen) return screen.key;
+  // A rail entry the snapshot does not carry -- My work needs a signed-in person -- goes
+  // to the pipeline rather than nowhere.
+  return 'pipeline';
+}
 
 function mainOf(document: string): string {
   const match = /<main>([\s\S]*?)<\/main>/.exec(document);
@@ -106,10 +120,10 @@ function rewriteLinks(
     const pursuitLink = /^pursuits\/(\d+)$/.exec(pathname);
     if (pursuitLink) {
       const id = pursuitLink[1]!;
-      return renderedPursuits.has(id) ? `href="#pursuit-${id}"` : 'href="#upcoming"';
+      return renderedPursuits.has(id) ? `href="#pursuit-${id}"` : 'href="#pipeline"';
     }
 
-    if (pathname === '') return 'href="#overview"';
+    if (pathname === '') return 'href="#dashboard"';
 
     const screen = SCREENS.find((s) => s.path === `/${pathname}`);
     return screen ? `href="#${screen.key}"` : `href="#${escape(pathname)}"`;
@@ -224,6 +238,11 @@ ${css}
   color: var(--silver);
 }
 
+/* The snapshot cannot act on anything, so nothing in it should look as though it can. */
+.card-body form,
+.actions form,
+.page-head .actions { display: none; }
+
 .demo-banner-inner {
   max-width: var(--shell);
   margin: 0 auto;
@@ -243,51 +262,38 @@ ${css}
 }
 </style>
 
-<div class="demo-banner">
-  <div class="demo-banner-inner">
-    <strong>Static snapshot</strong>
-    <span>Built ${built} UTC from a synthetic corpus. Every company here is invented.</span>
-    <span>Nothing is live: search filters the exported rows, and each list carries its first page.</span>
-  </div>
-</div>
-
-<header class="masthead">
-  <div class="masthead-inner">
-    <div class="brand">
+<div class="app">
+  <nav class="rail" aria-label="Sections">
+    <div class="rail-brand">
       <img src="data:image/png;base64,${logo}" alt="Astrion">
-      <div class="brand-divider"></div>
-      <div>
-        <div class="brand-title">Contract Intelligence + Integration Engine</div>
-        <div class="brand-sub">Phase 1 · Data foundation</div>
+      <div class="product">Contract Intelligence</div>
+    </div>
+${NAV.map(
+  (group) => `    <div class="rail-group">
+      <div class="label">${group.label}</div>
+${group.items.map((item) => `      <a href="#${keyFor(item.href)}" data-nav="${keyFor(item.href)}"><span class="glyph">${item.glyph}</span>${item.label}</a>`).join('\n')}
+    </div>`,
+).join('\n')}
+    <div class="rail-foot">
+      <div class="slogan">Defend This World. Build the Next.</div>
+      <div>Static snapshot, built ${built} UTC</div>
+    </div>
+  </nav>
+
+  <div class="surface">
+    <div class="demo-banner">
+      <div class="demo-banner-inner">
+        <strong>Static snapshot</strong>
+        <span>Built ${built} UTC from a synthetic corpus. Every company here is invented.</span>
+        <span>Nothing is live: search filters the exported rows, and no action can be taken.</span>
       </div>
     </div>
-    <div class="masthead-meta">
-      <strong>${state.migrationsApplied}</strong> migrations applied<br>
-      ${state.hasCorpus ? 'Corpus loaded' : 'No corpus loaded'} ·
-      ${state.hasSeeds ? 'seeds present' : 'no seeds'}
-    </div>
-  </div>
-  <nav class="nav">
-${SCREENS.map((s) => `    <a href="#${s.key}" data-nav="${s.key}">${s.label}</a>`).join('\n')}
-  </nav>
-</header>
 
-<main>
+    <main>
 ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join('\n')}
-</main>
-
-<footer class="foot">
-  <div class="foot-inner">
-    <div>
-      <div class="slogan">Defend This World. Build the Next.</div>
-      <div>Read only. This interface never writes to the database.</div>
-    </div>
-    <div>
-      A static export of the interface in <code>src/web</code>. The running version queries
-      a live PostgreSQL database.
-    </div>
+    </main>
   </div>
-</footer>
+</div>
 
 <script>
 (function () {
@@ -303,11 +309,11 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
       section.classList.toggle('current', match);
       if (match) found = true;
     });
-    if (!found) return show('overview');
+    if (!found) return show('dashboard');
 
     // An entity detail screen keeps Entities marked, since that is where it came from.
     var navKey = key.indexOf('entity-') === 0 ? 'entities'
-      : key.indexOf('pursuit-') === 0 ? 'upcoming'
+      : key.indexOf('pursuit-') === 0 ? 'pipeline'
       : key;
     navLinks.forEach(function (link) {
       link.classList.toggle('current', link.getAttribute('data-nav') === navKey);
@@ -316,7 +322,7 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
   }
 
   function fromHash() {
-    show((window.location.hash || '#overview').slice(1));
+    show((window.location.hash || '#dashboard').slice(1));
   }
 
   window.addEventListener('hashchange', fromHash);
