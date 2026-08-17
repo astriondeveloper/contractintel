@@ -25,12 +25,13 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { closePool } from '../src/db/index.js';
-import { databaseState, entities } from '../src/web/queries.js';
+import { databaseState, entities, upcomingSignals } from '../src/web/queries.js';
 import type { Ctx } from '../src/web/shell.js';
 import { escape } from '../src/web/html.js';
 
 import { overview } from '../src/web/pages/overview.js';
 import { upcoming } from '../src/web/pages/upcoming.js';
+import { pursuit } from '../src/web/pages/pursuit.js';
 import { entityDetail, entityList } from '../src/web/pages/entities.js';
 import { contracts } from '../src/web/pages/contracts.js';
 import { subcontracts } from '../src/web/pages/subcontracts.js';
@@ -72,6 +73,9 @@ const SCREENS: readonly Screen[] = [
 /** How many entity detail screens to carry, so the links out of the list go somewhere. */
 const ENTITY_DETAILS = 24;
 
+/** How many pursuit traces to carry. The trace is the most worth clicking through to. */
+const PURSUIT_DETAILS = 24;
+
 function mainOf(document: string): string {
   const match = /<main>([\s\S]*?)<\/main>/.exec(document);
   if (match === null) throw new Error('A page rendered without a <main>. The layout changed.');
@@ -85,7 +89,11 @@ function mainOf(document: string): string {
  * list -- goes to the nearest screen that does exist rather than nowhere. A dead link is
  * worse than an approximate one when the whole point is to click around.
  */
-function rewriteLinks(html: string, renderedEntities: ReadonlySet<string>): string {
+function rewriteLinks(
+  html: string,
+  renderedEntities: ReadonlySet<string>,
+  renderedPursuits: ReadonlySet<string>,
+): string {
   return html.replace(/href="\/([^"]*)"/g, (_match, rest: string) => {
     const [pathname = ''] = rest.split('?');
 
@@ -93,6 +101,12 @@ function rewriteLinks(html: string, renderedEntities: ReadonlySet<string>): stri
     if (entity) {
       const id = entity[1]!;
       return renderedEntities.has(id) ? `href="#entity-${id}"` : 'href="#entities"';
+    }
+
+    const pursuitLink = /^pursuits\/(\d+)$/.exec(pathname);
+    if (pursuitLink) {
+      const id = pursuitLink[1]!;
+      return renderedPursuits.has(id) ? `href="#pursuit-${id}"` : 'href="#upcoming"';
     }
 
     if (pathname === '') return 'href="#overview"';
@@ -139,6 +153,10 @@ async function main(): Promise<void> {
   const top = await entities('', '', ENTITY_DETAILS, 0);
   const renderedEntities = new Set(top.rows.map((row) => row.entity_id));
 
+  // The pursuits the Upcoming screen shows first, so its links land somewhere.
+  const topPursuits = await upcomingSignals('', '', '', 'when', PURSUIT_DETAILS, 0);
+  const renderedPursuits = new Set(topPursuits.rows.map((row) => row.pursuit_id));
+
   process.stdout.write('Rendering screens\n');
 
   const bodies: { key: string; label: string | null; html: string }[] = [];
@@ -149,7 +167,7 @@ async function main(): Promise<void> {
     bodies.push({
       key: screen.key,
       label: screen.label,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities)),
+      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities, renderedPursuits)),
     });
     process.stdout.write(`  ${screen.path}\n`);
   }
@@ -161,10 +179,22 @@ async function main(): Promise<void> {
     bodies.push({
       key: `entity-${row.entity_id}`,
       label: null,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities)),
+      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities, renderedPursuits)),
     });
   }
   process.stdout.write(`  ${top.rows.length} entity detail screen(s)\n`);
+
+  for (const row of topPursuits.rows) {
+    const ctx: Ctx = { url: new URL(`http://demo/pursuits/${row.pursuit_id}`), state };
+    const rendered = await pursuit(ctx, row.pursuit_id);
+    if (rendered === null) continue;
+    bodies.push({
+      key: `pursuit-${row.pursuit_id}`,
+      label: null,
+      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities, renderedPursuits)),
+    });
+  }
+  process.stdout.write(`  ${topPursuits.rows.length} pursuit trace screen(s)\n`);
 
   // The stylesheet, with the fonts inlined. A published page cannot reach a font CDN and
   // a silent fallback to Arial would break the thing acceptance test 12 is about.
@@ -276,7 +306,9 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
     if (!found) return show('overview');
 
     // An entity detail screen keeps Entities marked, since that is where it came from.
-    var navKey = key.indexOf('entity-') === 0 ? 'entities' : key;
+    var navKey = key.indexOf('entity-') === 0 ? 'entities'
+      : key.indexOf('pursuit-') === 0 ? 'upcoming'
+      : key;
     navLinks.forEach(function (link) {
       link.classList.toggle('current', link.getAttribute('data-nav') === navKey);
     });
