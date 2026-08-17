@@ -4,23 +4,25 @@
  * nothing has been loaded rather than because something is wrong.
  */
 import { html, type Html } from './html.js';
-import { page } from './layout.js';
+import { page, type RailBadges } from './layout.js';
 import { count } from './format.js';
+import type { User } from './auth.js';
 import type { DatabaseState } from './queries.js';
 
 export interface Ctx {
   readonly url: URL;
   readonly state: DatabaseState;
+  /** Null when nobody is signed in, which makes every write refuse rather than guess. */
+  readonly user: User | null;
+  /** Queue counts for the rail, so what needs attention is visible without opening it. */
+  readonly badges?: RailBadges;
 }
 
 /** The right-hand masthead line: schema version and whether a corpus is present. */
 export function meta(state: DatabaseState): Html {
-  if (state.migrationsApplied === 0) {
-    return html`<strong>Not migrated.</strong><br>Run <code>npm run migrate</code>`;
-  }
-  return html`<strong>${count(state.migrationsApplied)}</strong> migrations applied<br>
-    ${state.hasCorpus ? 'Corpus loaded' : 'No corpus loaded'} ·
-    ${state.hasSeeds ? 'seeds present' : 'no seeds'}`;
+  if (state.migrationsApplied === 0) return html`Not migrated`;
+  return html`${state.hasCorpus ? 'Corpus loaded' : 'No corpus'} · schema
+    ${count(state.migrationsApplied)}`;
 }
 
 /**
@@ -53,18 +55,31 @@ export interface ScreenOptions {
   readonly title: string;
   readonly intro?: string;
   readonly body: Html;
+  /** Buttons and links acting on whatever the screen is about. */
+  readonly actions?: Html;
   /** Set when the screen handles its own empty state and wants no banner. */
   readonly suppressEmptyNotice?: boolean;
+  /** Shown above everything, after the empty-corpus banner. For an action result. */
+  readonly flash?: Html;
 }
 
 /** Render a screen inside the standard chrome. */
 export function screen(ctx: Ctx, options: ScreenOptions): string {
+  const empty = options.suppressEmptyNotice ? undefined : emptyCorpusNotice(ctx.state);
+  const notice =
+    options.flash && empty
+      ? html`${options.flash}${empty}`
+      : (options.flash ?? empty);
+
   return page({
     title: options.title,
     intro: options.intro,
     path: ctx.url.pathname,
     meta: meta(ctx.state),
-    notice: options.suppressEmptyNotice ? undefined : emptyCorpusNotice(ctx.state),
+    notice,
     body: options.body,
+    actions: options.actions,
+    user: ctx.user,
+    badges: ctx.badges,
   });
 }

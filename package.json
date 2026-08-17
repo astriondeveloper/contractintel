@@ -20,7 +20,13 @@
     "typecheck": "tsc --noEmit",
     "web": "tsx src/web/server.ts",
     "web:dev": "tsx watch src/web/server.ts",
-    "demo": "tsx scripts/build-demo.ts"
+    "demo": "tsx scripts/build-demo.ts",
+    "signals": "tsx src/signals/run-signals.ts",
+    "profile": "tsx src/signals/run-profile.ts",
+    "load:sam": "tsx src/loaders/run-sam.ts",
+    "score": "tsx src/scoring/run-score.ts",
+    "forecast": "tsx src/forecast/run-forecast.ts",
+    "forecast:backtest": "tsx src/forecast/run-backtest.ts"
   },
   "dependencies": {
     "csv-parse": "^5.5.6",

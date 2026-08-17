@@ -102,6 +102,20 @@ jobs:
       - name: Tests
         run: npm test
 
+      # The scheduled jobs run against the seeded-but-not-loaded database CI has, which is also
+      # the state of a fresh clone. Each one has to exit cleanly and say what it found rather
+      # than failing on an empty corpus: a job that only works once data is loaded is a job
+      # nobody discovers is broken until the day the data arrives.
+      - name: The scheduled jobs run against an empty corpus
+        run: |
+          npm run profile -- --taxonomy-only
+          npm run signals -- --dry-run
+          npm run forecast -- --dry-run
+          npm run forecast
+          npm run forecast:backtest -- --as-of 2022-10-01
+          # Twice, because the forecast is a derived table and a second run must change nothing.
+          npm run forecast
+
       # Acceptance tests are expected to report blocked items until the remaining phases
       # exist. A FAIL is what must not happen, so that is what is checked.
       - name: Acceptance tests report no failures
@@ -125,9 +139,13 @@ jobs:
             sleep 1
           done
           status=0
-          for route in / /entities /contracts /subcontracts /customers /programs \
-                       /dacis-contracts /taxonomy /watchlist /review /quality /acceptance \
-                       /healthz /api/overview /api/acceptance /api/quality \
+          for route in / /feed '/feed?view=everything' '/feed?view=tracked' \
+                       '/feed?view=patch&sort=fit' /follows /forecast \
+                       '/forecast?scope=everything&confidence=high' /handoffs \
+                       /overview /entities /contracts /subcontracts /customers \
+                       /programs /dacis-contracts /taxonomy /watchlist /review /quality \
+                       /acceptance /healthz /api/dashboard /api/feed /api/forecast \
+                       /api/handoffs /api/overview /api/acceptance /api/quality \
                        /app.css /fonts/Archivo-Regular.woff2; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$route")
             if [ "$code" != "200" ]; then
@@ -137,10 +155,38 @@ jobs:
               echo "  $code  $route"
             fi
           done
-          # Read only is a property of the router, not just an absence of forms.
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:3000/)
-          if [ "$code" != "405" ]; then
-            echo "::error::POST / returned $code, expected 405. The interface must be read only."
+          # The old pipeline URLs still resolve rather than 404ing somebody's bookmark.
+          for old in /pipeline /my-work /upcoming /pursuits/1; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3000$old")
+            case "$code" in
+              301|302) echo "  $code  $old (moved)" ;;
+              *) echo "::error::$old returned $code, expected a redirect."; status=1 ;;
+            esac
+          done
+          # Writing is answered on three shapes of path and nowhere else, so the audit trail
+          # cannot be bypassed by finding another endpoint.
+          for notanaction in / /requirements/1/nonsense /follows/nonsense /feed; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:3000$notanaction")
+            if [ "$code" != "404" ]; then
+              echo "::error::POST $notanaction returned $code, expected 404. POST is only an action path."
+              status=1
+            fi
+          done
+          # And with no authentication configured, a real action is refused rather than
+          # attributed to nobody. CIE_AUTH_MODE is unset in this job, so this is the secure
+          # default being checked rather than a special case. Spec section 20.
+          for action in /requirements/1/track /requirements/1/sent /follows/follow /feed/mark-read; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:3000$action")
+            if [ "$code" != "403" ]; then
+              echo "::error::POST $action returned $code, expected 403. No actor, no write."
+              status=1
+            fi
+          done
+          # The spreadsheet export is a GET because it writes nothing, and it refuses an
+          # empty selection rather than assembling the whole corpus.
+          code=$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:3000/export.csv')
+          if [ "$code" != "400" ]; then
+            echo "::error::/export.csv with no selection returned $code, expected 400."
             status=1
           fi
           kill "$(cat web.pid)" 2>/dev/null || true

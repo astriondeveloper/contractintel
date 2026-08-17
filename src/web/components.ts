@@ -175,6 +175,79 @@ export function fields(items: readonly Field[]): Html {
   </div>`;
 }
 
+/* ------------------------------------------------------------------- cards */
+
+export interface CardOptions {
+  readonly title: string;
+  readonly hint?: string;
+  /** A link in the card header, for "see all of these". */
+  readonly more?: { href: string; label: string };
+  readonly body: Html;
+  /** Card bodies are lists by default; set for prose or a form. */
+  readonly plain?: boolean;
+}
+
+/**
+ * A dashboard widget.
+ *
+ * Each card scrolls inside itself rather than growing the page, so a dashboard with a
+ * hundred items in one queue still shows every other queue without scrolling past it.
+ */
+export function card(options: CardOptions): Html {
+  return html`<section class="card">
+    <header>
+      <h3>${options.title}</h3>
+      ${options.more
+        ? html`<a class="hint" href="${options.more.href}">${options.more.label}</a>`
+        : options.hint
+          ? html`<span class="hint">${options.hint}</span>`
+          : ''}
+    </header>
+    <div class="card-body${options.plain ? ' plain' : ''}">${options.body}</div>
+  </section>`;
+}
+
+export function cards(items: readonly Html[]): Html {
+  return html`<div class="cards">${items}</div>`;
+}
+
+export interface FeedItem {
+  readonly href?: string;
+  /** Chips shown before the headline: a band, a stage. */
+  readonly lead?: Html;
+  readonly headline: string;
+  readonly meta?: readonly (string | Html)[];
+  /** A figure aligned right: a score, a value, a count. */
+  readonly figure?: string;
+  /** 0 to 1. Draws a bar under the row. */
+  readonly share?: number;
+  readonly shareTone?: 'good' | 'warn' | 'sky';
+}
+
+export function feed(items: readonly FeedItem[], empty: Html): Html {
+  if (items.length === 0) return html`<div class="empty">${empty}</div>`;
+
+  return html`${items.map((item) => {
+    const inner = html`<div class="top">
+        ${item.lead ?? ''}
+        <span class="headline">${item.headline}</span>
+        ${item.figure ? html`<span class="num">${item.figure}</span>` : ''}
+      </div>
+      ${item.meta && item.meta.length > 0
+        ? html`<div class="meta">${item.meta.map((m) => html`<span>${m}</span>`)}</div>`
+        : ''}
+      ${item.share === undefined
+        ? ''
+        : html`<div class="meter ${item.shareTone ?? 'sky'}">
+            <span style="width:${Math.round(Math.max(0, Math.min(1, item.share)) * 100)}%"></span>
+          </div>`}`;
+
+    return item.href
+      ? html`<a class="feed" href="${item.href}">${inner}</a>`
+      : html`<div class="feed">${inner}</div>`;
+  })}`;
+}
+
 /* ----------------------------------------------------------------- section */
 
 export function section(title: string, body: Html, hint?: string): Html {

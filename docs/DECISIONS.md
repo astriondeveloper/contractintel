@@ -295,6 +295,355 @@ from the OSINT finding rather than being made safe by it, and two things stay tr
 
 ---
 
+## D13. A contract is identified by its vehicle and its PIID, not its PIID
+
+**Spec section 9.1** asks for a signal when a contract is inside the recompete window.
+`contract_action` holds transactions, so something has to say which transactions are the
+same award, and the obvious answer is wrong.
+
+**What forced it.** Agency 9700 PIID `0001` modification `0` carries 58 distinct payloads
+on the supplied corpus, and `0002` and `0003` are similar. Those are not 58 modifications
+of one contract. A task order PIID is assigned by the ordering office and is unique only
+inside the vehicle it was ordered against, so `0001` is the first task order under this
+IDV and also the first under every other one.
+
+**Decision.** `contract_group`, in migration 0019, keys on
+`(awarding_agency_code, coalesce(idv_piid, ''), piid)`. The awardee is deliberately not in
+the key: a novation moves a contract to another company, and keying on the awardee would
+split one contract in two and raise two recompete signals for one recompete. The incumbent
+is read from the most recently signed action instead.
+
+**The sharper edge, found while writing the tests.** `contract_action`'s own primary key is
+spec 7.2's natural key, and the vehicle is not in it either. Two task orders numbered
+`0001` under different IDVs collide on the primary key itself, not merely in a `group by`.
+The only column separating them is the transaction number, which the export leaves blank
+on every row.
+
+That makes **D3 load bearing for recompete detection** rather than merely tidy. The
+content-derived surrogate transaction number is what gives those task orders separate rows
+at all. Loaded with `--spec-transaction-key`, one overwrites the other and the signal
+appears on the wrong contract with nothing on screen to suggest anything is missing. When
+the export populates `Transaction #`, the same property holds for a better reason.
+
+**What remains a judgement call.** Where `idv_piid` is blank the key degenerates to
+`(agency, piid)`, which is right for a standalone award and is the residual risk.
+`contract_group_ambiguous` measures exactly that residue rather than assuming it away, in
+the same spirit as `fpds_collapse_summary`. On a corpus where
+`likely_unrelated_awards` is large, this decision needs revisiting before the signals are
+trusted.
+
+---
+
+## D14. Two assumptions in recompete detection, both recorded rather than buried
+
+Neither is measured. Both are stated here so they can be argued with.
+
+**Twelve months of solicitation lead.** `expected_solicitation_fy` is derived as the fiscal
+year twelve months before the contract ends. The figure comes from the window itself: spec
+section 9 opens the recompete window at twelve months out, which only makes sense if that
+is roughly when the follow-on is expected to appear. It is `SOLICITATION_LEAD_MONTHS` in
+`src/signals/recompete.ts`; every generated row is rewritten from source on each run, so
+changing it needs no migration. A measured lead time per agency would be better and is not
+available from the corpus.
+
+**A subcontract position is matched on PIID alone.** `subcontract_edge` carries a prime
+PIID but no awarding agency, so the test that decides whether Astrion subs on a contract
+can over-match on a short PIID in the same way the grouping can. It is used only to label
+`astrion_position`, never to create a signal that would not otherwise exist, so a false
+positive files a row under the wrong play rather than inventing an opportunity. Raising it
+to certainty needs the reconciliation in backlog item 8.
+
+---
+
+## D15. The SAM.gov search is targeted by the profile, and refuses to run without one
+
+**The brief**: opportunities that fit the company, looking further out than a solicitation
+window. Both halves of that are decisions rather than settings.
+
+**Targeting.** SAM.gov publishes every federal notice, and a feed nobody has curated is a
+feed nobody reads. `opportunity_profile` is the curation, and it is built rather than
+authored from nothing:
+
+- **The taxonomy side** is `node_crosswalk`, which already carries the PSC, NAICS and agency
+  crosswalk of every capability node from `capability_taxonomy_seed.csv`. That is BD's own
+  statement of what the company does, expressed in exactly the codes SAM.gov filters on. It
+  includes work the company wants and does not yet hold.
+- **The corpus side** is the NAICS and PSC codes on Astrion's own contract actions and the
+  agencies that awarded them, scoped through the entity rollup. It is evidence rather than
+  intent, and it catches work the taxonomy has not caught up with.
+
+A code that appears in both is a stronger statement than a code in either, so both rows are
+kept and `opportunity_profile_effective` collapses them for the search. Five actions is the
+floor on the observed side: below that a code is as likely to be a mis-coded transaction as
+a line of business.
+
+**The loader refuses to run when the profile is empty** rather than falling back to
+searching for everything. A quiet fallback to the firehose is the failure mode this feature
+exists to prevent, and it would be discovered only by the person reading the resulting list.
+
+**Looking further out.** Restricting to notices closing in the next six months finds only
+work that is already too late to shape. The notice type is the field that carries how early
+a thing is, so it is kept raw and it sets the signal class: sources sought, special notice
+and intent to bundle become `shaping_target`; presolicitation, solicitation and combined
+synopsis become `active_solicitation`; award notices become `market_movement` and are
+opt-in, being the highest-volume type and about work that is finished. An unrecognised type
+is counted and skipped rather than guessed at.
+
+**What remains a judgement call.** The profile searches on NAICS and PSC only, because
+those are the codes the v2 endpoint filters on (`ncode`, `ccode`). Agency and set-aside are
+collected for the score model's gates instead. One request per code per run means the
+profile's size is the API bill: 25 codes is 25 requests, and a public key's daily quota is
+finite. `--max-requests` caps it and the run says when it stopped early, because a
+silently incomplete pipeline is worse than a short one.
+
+---
+
+## D16. What the scoring engine refuses to guess
+
+Spec section 10 describes the model. Building it turned four things into decisions, and
+each one is a decision to say "not known" where guessing would have been easier.
+
+**Three gates cannot be evaluated and say so.** There is no facility clearance data in the
+corpus, on the requirement or on Astrion, and no conflict-of-interest register. The vehicle
+a solicitation will be ordered under is rarely stated. Those return `not_evaluated` with a
+reason naming what is missing. **`not_evaluated` is not `pass`**, and the interface shows the
+difference: a gate reported as cleared is a gate nobody checks again.
+
+**The set-aside gate never fails.** The only evidence available is which set-asides Astrion
+has previously been awarded under. Having won under a category is good evidence of holding
+it; never having won under one is not evidence of not holding it, because the company may
+hold a status it has not used or gained one since the export. Failing a pursuit on that
+inference would drop real opportunities silently, and a thing that vanishes leaves no trace
+to notice. So an unrecognised set-aside is `review`: a person checks the status.
+
+**Zero and unknown are kept apart everywhere.** A pursuit whose codes are known and match
+nothing on the profile scores capability zero, because the question was asked and answered.
+A pursuit with no codes at all is `unknown`, keeps its weight in the denominator, and costs
+coverage. The distinction is enforced by the database as well as the code: `factor_result`
+has a check constraint that a score exists only in the `scored` state.
+
+**The rank is the strategic fit and nothing else.** Spec 10.1 gives four outputs and says
+not to merge them, so timing urgency and evidence confidence sit beside the fit on the
+screen and are never folded into it. Ordering by a blend would produce a number that moves
+for reasons nobody can name.
+
+**What this costs, and it is worth stating plainly.** On a corpus where BD Ops has not
+filled in `growth_priority` and the taxonomy carries no technology nodes, two factors worth
+17 of the 100 weight are unanswerable. Coverage is therefore rarely near 100 percent, and
+the floor at 0.60 is doing real work rather than sitting unused. The number goes up when BD
+fills the columns in, which is the intended incentive.
+
+---
+
+## D17. A subscription, not an assignment
+
+**The spec section 9 pipeline states and `pursuit.owner` describe a system of record.** One owner
+per opportunity, a funnel state, a snooze, an assignment list. That is the right shape for the
+system that holds the truth about a pursuit, and TechnoMile is that system.
+
+**It is the wrong shape for this one.** Twenty-odd BD people who check occasionally, reading
+mostly. An owner column across that population produces a list of things nobody has picked up,
+which reads as a backlog and gets avoided; and it forces a decision about who owns a requirement at
+the exact moment nobody yet knows enough to own it.
+
+**Decision.** The interface moved from assignment to subscription.
+
+- A **follow** is per person: a capability node, an agency, an office, a company, or a raw NAICS,
+  PSC or keyword. `follow_pursuit` matches them against requirements and says which follow matched,
+  so the feed can answer "why is this in front of me".
+- A **feed** is the union of one person's follows, ordered by when things landed. There is no
+  bottom to it and no "done", only "seen", so nothing accumulates as a debt.
+- **track, dismiss and sent** are per person. Two people can reach opposite conclusions about the
+  same requirement and both are true statements about who thought what. A shared verdict would
+  make one of them the owner again.
+
+**What was kept.** `pursuit.owner`, `pursuit.state` and `pursuit.snoozed_until` are still on the
+table with whatever rows were written to them, and `pipeline_item` still exists. Migrations here
+are forward only, and a column the interface stopped reading costs nothing next to a column that
+has to be restored when somebody asks what happened to the funnel. What changed is which screens
+exist. `/pipeline`, `/my-work` and `/upcoming` redirect to the feed rather than 404ing a bookmark.
+
+**Two judgement calls inside it.**
+
+A **capability follow matches on what the work is, not on who buys it.** A taxonomy node crosswalks
+to NAICS, PSC, keywords *and* agencies. Matching on the agency crosswalk would mean following one
+capability quietly subscribed you to every notice that agency posts, which is the firehose D15
+exists to avoid, in a different costume. Following a buyer is a separate, explicit choice.
+
+A **company follow matches through the entity rollup.** Following the top of a corporate family
+catches the family; following one subsidiary catches that subsidiary and not its sister companies.
+It also matches a company in any role on a requirement, not only as incumbent, because decision D5
+is that partner and competitor are per-pursuit roles and "what is happening around this company" is
+the question a company follow is asked.
+
+**The read mark moves only when a person moves it.** Advancing it on page load is the obvious
+implementation and it loses the item somebody was halfway through reading when they hit refresh.
+It is also a GET that writes, which is exactly what the router refuses to have. So it is a button,
+and with no mark set the feed shows a fourteen-day window and says so rather than declaring the
+whole corpus new on a first visit.
+
+---
+
+## D18. `sent` is the only measure of whether this tool works, so nothing can erase it
+
+**The count of requirements a person carried from here into TechnoMile by hand.** Not sign-ins, not
+rows loaded, not notices matched, not the size of the feed. Every one of those can look healthy
+while this stays at zero, and if it does stay at zero the honest conclusion is that the tool is not
+earning its place.
+
+**Decision.** `pursuit_action` holds a set of rows per person rather than one state column, and
+`sent` is not the opposite of `track` or `dismiss`. Tracking clears a dismiss and dismissing clears
+a track, because those two are genuinely opposites. Neither touches `sent`. A person who hands a
+requirement to TechnoMile and then dismisses it from their own feed has still handed it over, and
+held as a single state column that fact would be gone.
+
+Undoing a send is its own action with its own audit row, so the number cannot drift downwards as a
+side effect of tidying a feed.
+
+**The second number, and it matters as much.** `technomile_handoff.days_before_response_due` is how
+far ahead of the deadline each hand-off happened. Being early is the entire proposition: a healthy
+count with a median of four days would mean the tool is technically working and practically
+pointless. Both figures are on `/handoffs`, which is deliberately plain, because it is the screen
+somebody puts in front of leadership and a screen built to persuade is a screen nobody believes
+twice.
+
+---
+
+## D19. What the forecast projects, and what it refuses to claim
+
+**The forecast is the highest-value screen here and the only one that can be quietly wrong for two
+years.** Every other screen shows something the corpus already contains. This one makes a claim
+about 2029.
+
+**The projection is one line of arithmetic**, stated on the screen rather than hidden:
+
+    projected solicitation date  =  period end date  −  lead time
+
+**Two things end and therefore project.** A contract ending has to be re-competed or let go. A
+vehicle ending has to be replaced, and the replacement is competed on-ramp by on-ramp, which is
+usually a larger and earlier opportunity than any of the task orders under it. Treating a vehicle
+as another contract would file the biggest opportunities in the corpus under the smallest heading,
+so it is a separate basis with its own evidence.
+
+**The lead time comes from one of three places and every row says which.**
+
+| Source | What it is | Bar it has to clear |
+|---|---|---|
+| `observed_notice_lag` | The office's own measured days from posting a notice to signing the award, from solicitation numbers that appear in both SAM.gov and FPDS | 3 matched notices |
+| `office_cadence` | Inferred from how often the office re-lets the same PSC, plus how far before the previous end date it awards the follow-on | 3 observed chains, and a median interval between 1 and 10 years |
+| `default` | 365 days, decision D13's assumption | none, and it is labelled an assumption |
+
+**A cadence is inferred from adjacency, because FPDS carries nothing better.** A recompete arrives
+as a new PIID with no pointer back to what it replaced. What FPDS does say is when each award
+started and ended, in which office, for what product or service code. So a follow-on is inferred
+from the same office buying the same PSC again around the time the previous award ends: six months
+early through twelve months late, asymmetric because an office awarding before the incumbent's
+period runs out is a well-run recompete and one awarding a year late is a bridge or a protest. One
+successor per award, the earliest qualifying one, or an office with twenty awards under one PSC
+produces a few hundred pairs and the median measures how busy the office is rather than the rhythm
+of anything in it.
+
+**An award with no PSC contributes nothing.** A cadence is a claim about a *kind of work*
+recurring, and an award with no product or service code says nothing about what kind of work it
+was. Grouping the code-less awards together would invent a category called "unclassified work in
+this office" and then measure its rhythm. `award_shape_excluded` counts what that leaves out.
+
+**What it refuses to do.**
+
+- **It never writes a `pursuit`.** A forecast says a requirement is likely; the feed says one
+  exists, and the feed's whole claim is that everything in it is real. Where a requirement for a
+  forecast contract has already been detected, the forecast row points at it and says so rather
+  than counting it twice in the same quarter.
+- **It shows its low-confidence rows.** A quarter with four weak projections and a quarter with
+  nothing in it are different facts, and hiding the weak ones makes them look the same.
+- **It caps confidence when the contract identity is not certain.** `contract_group_ambiguous` from
+  D13 reaches the confidence band rather than sitting in a diagnostic view: if a PIID might be two
+  unrelated awards, the end date might belong to the other one, and nothing downstream recovers
+  from that.
+- **It treats no recorded value as no recorded value.** A contract with no ceiling reaches the
+  volume of its quarter and not its value, and each quarter reports how many of its rows did that.
+  The total is labelled a floor.
+- **Stale rows are pruned.** A `pursuit` is a real thing and survives a re-detection. A forecast is
+  wholly derived, so a projection whose contract has been extended past the horizon is deleted:
+  a derived table that keeps rows nobody would derive again slowly stops being true.
+- **A vehicle is never high confidence** unless the office has a measured notice lag. The lead time
+  a vehicle gets is the contract lead time, which is very probably too short, and nothing in this
+  corpus measures how much too short. Rather than inventing a multiplier the projection records the
+  shortfall as evidence against itself.
+
+---
+
+## D20. The forecast is scored backwards, and the leak that would have made the score meaningless
+
+**Accuracy cannot be checked forwards without waiting two years.** So `npm run forecast:backtest`
+recomputes the projection as it would have stood on a past date and checks it against what the
+corpus says happened next.
+
+**The claim being scored is "this contract will be re-competed", not "a contract ending in March
+ends in March".** Plenty of contracts end and are never re-let: the work stops, gets absorbed into
+a bigger vehicle, or the office extends the incumbent for years. A projection hits when the corpus
+shows a follow-on award succeeding the same contract, awarded after the as-of date, landing within
+the tolerance of the projected period end. The tolerance is generous about timing and strict about
+subject, and it is recorded on every run: a hit rate without its tolerance is not a number.
+
+**The leak.** Filtering out awards signed after the as-of date is the obvious half. The half that
+bites is the **modification**: a contract whose end date was extended by a modification signed in
+2025 shows a 2029 end date today, and a 2023 projection using it would be projecting from a fact
+that did not exist yet. It would score well and mean nothing.
+
+So the end date is aggregated *inside* an as-of filter rather than the view being filtered
+afterwards. That is why `cie_award_shape_asof(date)` is a function and not a view, and why
+`cie_followon_chain_asof(date)` is too: a rhythm learned from the award being predicted is the same
+leak wearing a different hat. Without both, `src/forecast/backtest.ts` would produce a reassuring
+number and nothing else.
+
+**What the hit rate does not measure.** Recall over every recompete in the window, because the
+forecast projects every contract ending in its horizon and would score close to one by
+construction. `unforecast` measures the useful version instead: recompetes that happened in the
+window whose contract the forecast had no candidate for, because its end date fell outside the
+horizon or the contract carried no office or PSC. That is a statement about coverage, and it is the
+number that says what the forecast is blind to.
+
+**The bands make a falsifiable claim about themselves.** High confidence should beat low. If a
+sweep of as-of dates shows them level, the banding is decoration, and the honest response is to say
+so on the screen rather than keep three colours of chip. `npm run forecast:backtest` prints that
+comparison, and `/forecast` shows the latest run's rates side by side.
+
+---
+
+## D21. The hand-off is four things, because the four are not substitutes
+
+**No TechnoMile integration**, and that is the decision rather than a gap. What it leaves is a
+copy-and-paste problem, and a copy-and-paste problem done badly is how a tool gets abandoned:
+somebody who has to re-type nine fields will do it twice and then stop using the thing that made
+them.
+
+**Decision.** All four shapes, on the requirement screen, above the score rather than below it.
+
+- **The field block.** Label and value, one per line, in a box that selects on click. Codes carry
+  their labels, because nobody pasting into TechnoMile will look up what `6920` means and the
+  record would carry the number for ever.
+- **The written summary.** A paragraph for a description field or an email, assembled from the same
+  fields so the two cannot disagree about a date. Nothing in it is inferred, and where the record is
+  silent the sentence is left out rather than hedged: "the value is unknown" reads as a finding when
+  it is an absence.
+- **The SAM.gov link.** For the person who wants to read the notice rather than a summary of it.
+- **The spreadsheet.** A multi-select CSV export from the feed, for the hand-off that is thirty
+  rows rather than one.
+
+**Blank is handled differently in the block and in the CSV, on purpose.** In the block a missing
+value reads `not recorded`, because a gap in a pasted block reads as something the sender forgot to
+fill in. In the CSV the same value is an empty cell, because a spreadsheet sums a column and
+`not recorded` is not a number. Neither is ever a zero.
+
+**A CSV cell beginning `=`, `+`, `-` or `@` is executed as a formula when Excel opens the file.**
+Federal notice titles begin with all four and a set-aside code of `-` is not unusual, so every cell
+is prefixed with a single quote when it starts with one of them. The file carries a UTF-8 byte order
+mark and CRLF line endings, because it is opened in Excel on Windows and without the mark a vendor
+name carrying an accent arrives as mojibake.
+
+---
+
 ## Open questions
 
 **Gate B — is the GovWin API available?** Owner: Gavin.

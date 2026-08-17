@@ -25,11 +25,17 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { closePool } from '../src/db/index.js';
-import { databaseState, entities } from '../src/web/queries.js';
+import { databaseState, entities, feed, forecastItems, watermarkFor } from '../src/web/queries.js';
 import type { Ctx } from '../src/web/shell.js';
 import { escape } from '../src/web/html.js';
+import { NAV } from '../src/web/layout.js';
 
 import { overview } from '../src/web/pages/overview.js';
+import { dashboard } from '../src/web/pages/dashboard.js';
+import { feedScreen } from '../src/web/pages/feed.js';
+import { forecast, forecastDetail } from '../src/web/pages/forecast.js';
+import { handoffs } from '../src/web/pages/handoffs.js';
+import { requirement } from '../src/web/pages/requirement.js';
 import { entityDetail, entityList } from '../src/web/pages/entities.js';
 import { contracts } from '../src/web/pages/contracts.js';
 import { subcontracts } from '../src/web/pages/subcontracts.js';
@@ -53,7 +59,13 @@ interface Screen {
 }
 
 const SCREENS: readonly Screen[] = [
-  { key: 'overview', label: 'Overview', path: '/', render: overview },
+  { key: 'dashboard', label: 'Dashboard', path: '/', render: dashboard },
+  { key: 'feed', label: 'Feed', path: '/feed', render: feedScreen },
+  { key: 'forecast', label: 'Forecast', path: '/forecast', render: forecast },
+  { key: 'handoffs', label: 'Hand-offs', path: '/handoffs', render: handoffs },
+  // Follows belongs to a person and a snapshot has no signed-in person, so it is not carried.
+  // The rail link falls back to the feed, which is where a follow would take effect.
+  { key: 'overview', label: 'Corpus overview', path: '/overview', render: overview },
   { key: 'entities', label: 'Entities', path: '/entities', render: entityList },
   { key: 'contracts', label: 'Contract actions', path: '/contracts', render: contracts },
   { key: 'subcontracts', label: 'Subcontracts', path: '/subcontracts', render: subcontracts },
@@ -70,6 +82,21 @@ const SCREENS: readonly Screen[] = [
 /** How many entity detail screens to carry, so the links out of the list go somewhere. */
 const ENTITY_DETAILS = 24;
 
+/** How many requirement screens to carry. The rule trace is the most worth clicking through to. */
+const REQUIREMENT_DETAILS = 24;
+
+/** How many forecast projections to carry, so the bars open onto something. */
+const FORECAST_DETAILS = 16;
+
+/** The screen key a rail href points at, so the rail and the sections agree. */
+function keyFor(href: string): string {
+  const screen = SCREENS.find((s) => s.path === href);
+  if (screen) return screen.key;
+  // A rail entry the snapshot does not carry -- Follows needs a signed-in person -- goes to the
+  // feed rather than nowhere.
+  return 'feed';
+}
+
 function mainOf(document: string): string {
   const match = /<main>([\s\S]*?)<\/main>/.exec(document);
   if (match === null) throw new Error('A page rendered without a <main>. The layout changed.');
@@ -83,7 +110,12 @@ function mainOf(document: string): string {
  * list -- goes to the nearest screen that does exist rather than nowhere. A dead link is
  * worse than an approximate one when the whole point is to click around.
  */
-function rewriteLinks(html: string, renderedEntities: ReadonlySet<string>): string {
+function rewriteLinks(
+  html: string,
+  renderedEntities: ReadonlySet<string>,
+  renderedRequirements: ReadonlySet<string>,
+  renderedForecasts: ReadonlySet<string>,
+): string {
   return html.replace(/href="\/([^"]*)"/g, (_match, rest: string) => {
     const [pathname = ''] = rest.split('?');
 
@@ -93,7 +125,22 @@ function rewriteLinks(html: string, renderedEntities: ReadonlySet<string>): stri
       return renderedEntities.has(id) ? `href="#entity-${id}"` : 'href="#entities"';
     }
 
-    if (pathname === '') return 'href="#overview"';
+    const requirementLink = /^requirements\/(\d+)$/.exec(pathname);
+    if (requirementLink) {
+      const id = requirementLink[1]!;
+      return renderedRequirements.has(id) ? `href="#requirement-${id}"` : 'href="#feed"';
+    }
+
+    const forecastLink = /^forecast\/(\d+)$/.exec(pathname);
+    if (forecastLink) {
+      const id = forecastLink[1]!;
+      return renderedForecasts.has(id) ? `href="#forecast-${id}"` : 'href="#forecast"';
+    }
+
+    // The spreadsheet export needs a server to assemble the file, so it goes nowhere here.
+    if (pathname === 'export.csv') return 'href="#feed"';
+
+    if (pathname === '') return 'href="#dashboard"';
 
     const screen = SCREENS.find((s) => s.path === `/${pathname}`);
     return screen ? `href="#${screen.key}"` : `href="#${escape(pathname)}"`;
@@ -135,34 +182,77 @@ async function main(): Promise<void> {
 
   // The entities the list screen shows first, so its links land somewhere.
   const top = await entities('', '', ENTITY_DETAILS, 0);
-  const renderedEntities = new Set(top.rows.map((row) => row.entity_id));
+  const renderedEntities = new Set<string>(top.rows.map((row) => row.entity_id));
+
+  // The requirements the feed shows first, so its links land somewhere. Scoped to nobody, so the
+  // snapshot carries the whole picture rather than an empty patch.
+  const mark = await watermarkFor('');
+  const topRequirements = await feed(
+    '', mark.seen_through, 'everything', '', '', '', 'newest', REQUIREMENT_DETAILS, 0,
+  );
+  const renderedRequirements = new Set<string>(topRequirements.rows.map((row) => row.pursuit_id));
+
+  const topForecasts = await forecastItems('', 'everything', null, null, '', FORECAST_DETAILS, 0);
+  const renderedForecasts = new Set<string>(topForecasts.rows.map((row) => row.forecast_id));
 
   process.stdout.write('Rendering screens\n');
 
   const bodies: { key: string; label: string | null; html: string }[] = [];
 
   for (const screen of SCREENS) {
-    const ctx: Ctx = { url: new URL(`http://demo${screen.path}`), state };
+    const ctx: Ctx = { url: new URL(`http://demo${screen.path}`), state, user: null };
     const rendered = await screen.render(ctx);
     bodies.push({
       key: screen.key,
       label: screen.label,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities)),
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
     });
     process.stdout.write(`  ${screen.path}\n`);
   }
 
   for (const row of top.rows) {
-    const ctx: Ctx = { url: new URL(`http://demo/entities/${row.entity_id}`), state };
+    const ctx: Ctx = { url: new URL(`http://demo/entities/${row.entity_id}`), state, user: null };
     const rendered = await entityDetail(ctx, row.entity_id);
     if (rendered === null) continue;
     bodies.push({
       key: `entity-${row.entity_id}`,
       label: null,
-      html: stripDeadControls(rewriteLinks(mainOf(rendered), renderedEntities)),
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
     });
   }
   process.stdout.write(`  ${top.rows.length} entity detail screen(s)\n`);
+
+  for (const row of topRequirements.rows) {
+    const ctx: Ctx = { url: new URL(`http://demo/requirements/${row.pursuit_id}`), state, user: null };
+    const rendered = await requirement(ctx, row.pursuit_id);
+    if (rendered === null) continue;
+    bodies.push({
+      key: `requirement-${row.pursuit_id}`,
+      label: null,
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
+    });
+  }
+  process.stdout.write(`  ${topRequirements.rows.length} requirement screen(s)\n`);
+
+  for (const row of topForecasts.rows) {
+    const ctx: Ctx = { url: new URL(`http://demo/forecast/${row.forecast_id}`), state, user: null };
+    const rendered = await forecastDetail(ctx, row.forecast_id);
+    if (rendered === null) continue;
+    bodies.push({
+      key: `forecast-${row.forecast_id}`,
+      label: null,
+      html: stripDeadControls(
+        rewriteLinks(mainOf(rendered), renderedEntities, renderedRequirements, renderedForecasts),
+      ),
+    });
+  }
+  process.stdout.write(`  ${topForecasts.rows.length} projection screen(s)\n`);
 
   // The stylesheet, with the fonts inlined. A published page cannot reach a font CDN and
   // a silent fallback to Arial would break the thing acceptance test 12 is about.
@@ -192,6 +282,11 @@ ${css}
   color: var(--silver);
 }
 
+/* The snapshot cannot act on anything, so nothing in it should look as though it can. */
+.card-body form,
+.actions form,
+.page-head .actions { display: none; }
+
 .demo-banner-inner {
   max-width: var(--shell);
   margin: 0 auto;
@@ -211,51 +306,38 @@ ${css}
 }
 </style>
 
-<div class="demo-banner">
-  <div class="demo-banner-inner">
-    <strong>Static snapshot</strong>
-    <span>Built ${built} UTC from a synthetic corpus. Every company here is invented.</span>
-    <span>Nothing is live: search filters the exported rows, and each list carries its first page.</span>
-  </div>
-</div>
-
-<header class="masthead">
-  <div class="masthead-inner">
-    <div class="brand">
+<div class="app">
+  <nav class="rail" aria-label="Sections">
+    <div class="rail-brand">
       <img src="data:image/png;base64,${logo}" alt="Astrion">
-      <div class="brand-divider"></div>
-      <div>
-        <div class="brand-title">Contract Intelligence + Integration Engine</div>
-        <div class="brand-sub">Phase 1 · Data foundation</div>
+      <div class="product">Contract Intelligence</div>
+    </div>
+${NAV.map(
+  (group) => `    <div class="rail-group">
+      <div class="label">${group.label}</div>
+${group.items.map((item) => `      <a href="#${keyFor(item.href)}" data-nav="${keyFor(item.href)}"><span class="glyph">${item.glyph}</span>${item.label}</a>`).join('\n')}
+    </div>`,
+).join('\n')}
+    <div class="rail-foot">
+      <div class="slogan">Defend This World. Build the Next.</div>
+      <div>Static snapshot, built ${built} UTC</div>
+    </div>
+  </nav>
+
+  <div class="surface">
+    <div class="demo-banner">
+      <div class="demo-banner-inner">
+        <strong>Static snapshot</strong>
+        <span>Built ${built} UTC from a synthetic corpus. Every company here is invented.</span>
+        <span>Nothing is live: search filters the exported rows, and no action can be taken.</span>
       </div>
     </div>
-    <div class="masthead-meta">
-      <strong>${state.migrationsApplied}</strong> migrations applied<br>
-      ${state.hasCorpus ? 'Corpus loaded' : 'No corpus loaded'} ·
-      ${state.hasSeeds ? 'seeds present' : 'no seeds'}
-    </div>
-  </div>
-  <nav class="nav">
-${SCREENS.map((s) => `    <a href="#${s.key}" data-nav="${s.key}">${s.label}</a>`).join('\n')}
-  </nav>
-</header>
 
-<main>
+    <main>
 ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join('\n')}
-</main>
-
-<footer class="foot">
-  <div class="foot-inner">
-    <div>
-      <div class="slogan">Defend This World. Build the Next.</div>
-      <div>Read only. This interface never writes to the database.</div>
-    </div>
-    <div>
-      A static export of the interface in <code>src/web</code>. The running version queries
-      a live PostgreSQL database.
-    </div>
+    </main>
   </div>
-</footer>
+</div>
 
 <script>
 (function () {
@@ -271,10 +353,13 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
       section.classList.toggle('current', match);
       if (match) found = true;
     });
-    if (!found) return show('overview');
+    if (!found) return show('dashboard');
 
     // An entity detail screen keeps Entities marked, since that is where it came from.
-    var navKey = key.indexOf('entity-') === 0 ? 'entities' : key;
+    var navKey = key.indexOf('entity-') === 0 ? 'entities'
+      : key.indexOf('requirement-') === 0 ? 'feed'
+      : key.indexOf('forecast-') === 0 ? 'forecast'
+      : key;
     navLinks.forEach(function (link) {
       link.classList.toggle('current', link.getAttribute('data-nav') === navKey);
     });
@@ -282,7 +367,7 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
   }
 
   function fromHash() {
-    show((window.location.hash || '#overview').slice(1));
+    show((window.location.hash || '#dashboard').slice(1));
   }
 
   window.addEventListener('hashchange', fromHash);

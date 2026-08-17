@@ -10,9 +10,9 @@ git clone <repo-url> cie && cd cie
 cp .env.example .env
 docker compose up -d db          # PostgreSQL 16
 npm install
-npm run migrate                  # 18 forward-only SQL migrations
+npm run migrate                  # 20 forward-only SQL migrations
 npm run seed                     # the authored seed files, if you have them locally
-npm test                         # 164 tests, on the synthetic seeds in tests/seed/
+npm test                         # 218 tests, on the synthetic seeds in tests/seed/
 npm run accept                   # the twelve acceptance tests from spec section 18
 npm run web                      # the interface, http://localhost:3000
 ```
@@ -61,10 +61,12 @@ npm run load -- --role loss /path/to/whatever_they_called_it.csv
 build step, and no dependency that is not already in the lockfile.
 
 ```
-src/web/server.ts       routing, static assets, graceful shutdown
+src/web/server.ts       routing, the three write endpoints, static assets, graceful shutdown
 src/web/queries.ts      every statement the interface runs, in one place
+src/web/actions.ts      every write, each one with its audit row in the same transaction
+src/web/handoff.ts      the field block, the written summary, the CSV. No database
 src/web/pages/          one file per screen
-src/web/components.ts   tile, table, pager, chip, empty state
+src/web/components.ts   tile, table, pager, chip, feed row, empty state
 src/web/html.ts         escaping. Everything interpolated is escaped unless it came from `html`
 src/web/public/         app.css, the Archivo weights, the logo
 ```
@@ -74,11 +76,29 @@ file for review, using the same page functions the server calls. It embeds every
 renders, so build it against a synthetic corpus unless you mean to hand someone the real one.
 `docs/DEPLOY.md` has the detail.
 
-Three rules, each load bearing:
+Four rules, each load bearing:
 
-**It is read only, and the router enforces it.** Anything other than `GET` or `HEAD` gets a
-405. Working the review queue or confirming a seeded row writes to the corpus and needs the
-audit trail spec section 20 describes; a link on a list screen would bypass it.
+**Writing happens on three shapes of path and nowhere else, and the router enforces it.**
+
+```
+POST /requirements/<id>/<action>   track, dismiss, clear, sent, unsent, note
+POST /follows/<action>             follow, unfollow
+POST /feed/mark-read
+```
+
+Anything else answers 404 to a POST, and 405 to any other method. Every write refuses without a
+signed-in principal, and every one writes its change and its audit row in the same transaction, so
+a change without its audit row is not a thing that can happen. Spec section 20. CI asserts both
+halves: that POST on a non-action path is a 404, and that a real action with no authentication
+configured is a 403 rather than a write attributed to nobody.
+
+If you add a write, add it inside `performPursuitAction` or `performFollowAction` and let the
+existing transaction helper record it. Do not open a fourth endpoint shape: the narrowness is the
+property, not the tidiness.
+
+**A GET never writes.** The read mark is the case that tempts you. Advancing it on page load looks
+right and loses the item somebody was halfway through reading when they hit refresh, so it is a
+button. `touchUser` is the one exception and it records presence rather than a change.
 
 **Every screen must render against an empty database.** That is the state of a fresh clone,
 because no data is in this repository and none may be. A screen that assumes rows exist will
@@ -96,16 +116,124 @@ Styling follows the Astrion 2026 Brand Evolution: dark first, Astrion Black behi
 Deep Space cards, Alabaster type, Astrion Sky for anything interactive, and the three-stop
 gradient only as the thin rule at the top edge.
 
+## Working on the SAM.gov loader
+
+`loadSamOpportunities` takes its HTTP call as a parameter, so the tests hand it recorded
+pages and never touch the network or need a key. That is also how to develop against it:
+point `SAM_API_BASE` at a local stub and `SAM_API_KEY` at anything.
+
+Two properties are load bearing and both are tested.
+
+**The search is targeted.** It asks only for codes on `opportunity_profile`, and it refuses
+to run at all when the profile is empty rather than falling back to searching for
+everything. A test asserts that every code the loader asks for is on the profile.
+
+**The key never lands in the database.** `source_version` archives the whole notice, so a
+test asserts the key does not appear in any archived payload.
+
+If you add a notice type, add it to `NOTICE_TYPES` with the signal class it maps to.
+`classify` returns null for anything it does not know and the loader counts those and skips
+them, so a new SAM.gov type shows up as a number to look at rather than being filed under
+whatever is nearest.
+
+Letting this run has a second effect worth knowing: `office_notice_lag` measures the days between a
+notice being posted and the award being signed, from solicitation numbers that appear in both
+SAM.gov and FPDS, and that measurement is what moves a forecast from an assumption to a figure. Each
+office that crosses three matched notices improves without a line of code changing.
+
+## Working on the forecast
+
+`src/forecast/` is three files plus two entry points: `cadence.ts` learns what it can from the
+corpus, `forecast.ts` does the projection and the writing, `backtest.ts` scores it against history.
+
+```bash
+npm run forecast -- --dry-run
+npm run forecast
+npm run forecast:backtest -- --sweep 2021,2022,2023
+```
+
+Four things are load bearing and all four are tested.
+
+**The as-of functions are functions and not views, and that is the whole reason the backtest is
+worth running.** `cie_award_shape_asof(date)` aggregates a contract's end date *inside* a
+signed-date filter. Filtering `contract_group` afterwards cannot express that: the end date is an
+aggregate over actions, so a modification signed in 2025 would supply the end date to a projection
+recomputed for 2023. `cie_followon_chain_asof(date)` closes the same leak on the cadence side. A
+test asserts both directly, because without them the backtest reports a hit rate it cannot repeat.
+
+**A forecast is wholly derived and stale rows are pruned.** A `pursuit` is a real thing and
+survives a re-detection. A projection whose contract has been extended past the horizon is deleted,
+or the table slowly fills with dates that were true once. A test extends a contract and asserts the
+projection disappears.
+
+**It never writes a `pursuit`.** A forecast says a requirement is likely; the feed says one exists.
+A test counts `pursuit` rows either side of a run.
+
+**Confidence is derived from the evidence, not asserted.** `bandFor` reads the facts, and every fact
+lands in `forecast_evidence` with `supports` set, contrary evidence included. If you add a fact, add
+it to the `facts` array and let the band fall out; do not special-case the band.
+
+If a lead time looks wrong, the answer is almost always in `lead_source`. `default` means neither a
+measured notice lag nor an observed rhythm cleared its sample-size bar, which is the honest state on
+a shallow corpus and is what the screen says. `docs/BACKLOG.md` item 8 is what makes it better.
+
+## Working on follows and the feed
+
+`follow_pursuit` is a seven-arm union view, one arm per follow type, and it carries the field that
+matched so every feed row can say why it is there. `follow_forecast` is its counterpart against
+projections.
+
+Two properties, both tested:
+
+**A capability follow matches on what the work is, not on who buys it.** A taxonomy node crosswalks
+to agencies as well as codes, and matching on the agency crosswalk would mean following one
+capability quietly subscribed somebody to every notice that agency posts. A test asserts a
+requirement in the node's agency, under a code the node does not crosswalk to, does not match.
+
+**One person's actions never reach another person's feed.** `pursuit_action` is keyed per person, and
+a test asserts a dismiss by one person leaves the other's feed alone. If you add a per-person
+concept, key it the same way; a shared verdict makes somebody the owner, which is the model
+`docs/DECISIONS.md` D17 replaced.
+
+## Working on the scoring engine
+
+`src/scoring/` is four files: `model.ts` loads the versioned model and the shapes a rule
+returns, `gates.ts` and `factors.ts` hold one function per rule, and `engine.ts` does the
+arithmetic and the writing.
+
+Adding a factor means a row in `score_model_factor` **and** a case in `evaluateFactors`. A
+factor on the model with no rule behind it comes back `unknown` rather than zero, so
+coverage falls and somebody notices, which is the failure mode you want.
+
+Three rules are load bearing and all three are tested:
+
+**Divide by applicable weight, not known weight.** `not_applicable` leaves the denominator;
+`unknown` stays in it. The test asserts the right answer *and* asserts it differs from the
+wrong one, because both are plausible numbers and only one is right. This was defect 2 in
+the Codex baseline.
+
+**A score exists only in the `scored` state.** The database enforces it with a check
+constraint, and a test tries to violate it.
+
+**Nothing invents an answer.** If a rule cannot evaluate something it returns `unknown` or
+`not_evaluated` with a reason naming what is missing. `docs/DECISIONS.md` D16 lists what the
+engine refuses to guess and why.
+
 ## Before you open a pull request
 
 ```bash
 npm run typecheck && npm test
 ```
 
-CI runs those plus the migrations twice, the seed loaders twice, the acceptance suite, and a
-Docker build. If it passes locally it will pass there, with one exception: CI runs
-`npm ci`, so a dependency you added without committing the lockfile fails there and not
-here.
+CI runs those plus the migrations twice, the seed loaders twice, the scheduled jobs against an
+empty corpus, every route through a running server, the write endpoints with no authentication
+configured, the acceptance suite, and a Docker build. If it passes locally it will pass there, with
+one exception: CI runs `npm ci`, so a dependency you added without committing the lockfile fails
+there and not here.
+
+If you add a screen, add its route to the route list in `.github/workflows/ci.yml`. Every screen
+has to render against a seeded-but-unloaded database, because that is the state of a fresh clone,
+and the check is the only thing that keeps it true.
 
 ## Things that will trip you up
 
@@ -115,7 +243,7 @@ is not a thing you can do; add another one. This is deliberate and CI enforces i
 applying migrations twice.
 
 **There are no mocks.** Tests run against a real PostgreSQL because the schema *is* the
-design — 18 SQL files, no ORM. Several of the defects found so far were in SQL that a
+design — 23 SQL files, no ORM. Several of the defects found so far were in SQL that a
 mocked test would have declared healthy. `tests/fixtures/README.md` explains why fixtures
 are generated at run time rather than committed.
 
@@ -147,7 +275,8 @@ are marked shared, meaning the figure covers several awardees.
 - `docs/DECISIONS.md` — every place the build departs from the spec, and why.
 - `docs/BACKLOG.md` — the remaining phases, sized, in dependency order.
 - Migration headers — each one explains the defect or decision that produced it. Migrations
-  0014 and 0015 are worth reading before touching the loaders.
+  0014 and 0015 are worth reading before touching the loaders, 0019 before the signals, 0022
+  before the feed, and 0023 before the forecast.
 
 Commit messages carry reasoning going forward. The history starts at one commit because the
 earlier ones contained data Gate A forbids — see `docs/GITHUB_SETUP.md`.
