@@ -1,11 +1,12 @@
 /**
  * The application shell: a fixed left rail, a top bar, and a working surface.
  *
- * The rail is grouped by what a person is doing rather than by where the data came from.
- * Sell comes first because that is the job; Intelligence is what you check while doing it;
- * Reference is looked up rather than worked; System is for the person keeping the thing
- * honest. A menu ordered by table name would have been easier and would have made the
- * pipeline the fourth thing anybody saw.
+ * The rail is grouped by what a person is doing rather than by where the data came from. Your
+ * patch comes first because that is the job, and the four screens in it are the whole loop: what
+ * is new, what you follow, what is coming, and what you handed off. Intelligence is what you check
+ * while doing that; Reference is looked up rather than worked; System is for whoever keeps the
+ * thing honest. A menu ordered by table name would have been easier and would have made the feed
+ * the fourth thing anybody saw.
  *
  * Astrion 2026 Brand Evolution. The white logo on Midnight, the gradient only as the thin
  * rule at the top edge, and the slogan in the rail foot verbatim.
@@ -27,11 +28,13 @@ export interface NavGroup {
 
 export const NAV: readonly NavGroup[] = [
   {
-    label: 'Sell',
+    label: 'Your patch',
     items: [
       { href: '/', label: 'Dashboard', glyph: '◧' },
-      { href: '/pipeline', label: 'Pipeline', glyph: '≡' },
-      { href: '/my-work', label: 'My work', glyph: '◆' },
+      { href: '/feed', label: 'Feed', glyph: '≡' },
+      { href: '/follows', label: 'Follows', glyph: '◆' },
+      { href: '/forecast', label: 'Forecast', glyph: '◹' },
+      { href: '/handoffs', label: 'Hand-offs', glyph: '➔' },
     ],
   },
   {
@@ -137,8 +140,8 @@ export function page(options: PageOptions): string {
   <div class="surface">
     <header class="topbar">
       <div class="topbar-inner">
-        <form class="find" method="get" action="/pipeline" role="search">
-          <input type="search" name="q" placeholder="Search the pipeline: title, solicitation, PIID, agency" aria-label="Search the pipeline">
+        <form class="find" method="get" action="/feed" role="search">
+          <input type="search" name="q" placeholder="Search requirements: title, solicitation, PIID, agency" aria-label="Search requirements">
           <button type="submit">Search</button>
         </form>
         <div class="who">
