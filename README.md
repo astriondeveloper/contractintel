@@ -9,20 +9,21 @@ variables.
 
 ## State
 
-The data foundation is built and verified against the real corpus, recompete signals are
-detected from it, and there is a read-only interface over both. The scoring engine is not
-built, so signals are ordered by date and value rather than ranked.
+The data foundation is built and verified against the real corpus, signals are detected from
+it and from SAM.gov, every signal is scored against a versioned model, and there is a
+read-only interface over all of it.
 
 | | |
 |---|---|
 | Schema | 42 tables, 21 views, 20 migrations |
+| Scoring | 8 weighted factors, 5 hard gates, an evidence row per claim |
 | Loaders | FPDS transactions, FPDS subcontract edges, DACIS customers, programs, contracts |
 | Loaded | 22,624 contract actions, 4,042 subcontract edges, 854 customers, 74 programs, 213 DACIS contracts |
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
 | Signals | Recompetes from the corpus, and targeted SAM.gov notices from sources sought through solicitation |
-| Interface | Thirteen read-only screens, server rendered, no client bundle |
-| Tests | 200, against a real PostgreSQL 16 |
-| Acceptance tests | 6 of 12 pass, 0 fail, 6 blocked, each naming what it waits for |
+| Interface | Fourteen read-only screens, server rendered, no client bundle |
+| Tests | 218, against a real PostgreSQL 16 |
+| Acceptance tests | 9 of 12 pass, 0 fail, 3 blocked, each naming what it waits for |
 
 `npm run accept` prints the current state of all twelve. **Blocked** means a test names its
 dependency; a **FAIL** is a real problem and CI treats it as one.
@@ -78,6 +79,7 @@ button that quietly bypasses it.
 | Watchlist | Observed teaming direction against what the seed file stated |
 | Review queue | Everything the resolver refused to decide alone |
 | Data quality | The seven views that keep known source defects visible |
+| Pursuit | One signal, its score, and the rule trace behind every figure |
 | Acceptance | The twelve tests from spec section 18, run live |
 
 `/api/overview`, `/api/upcoming`, `/api/acceptance` and `/api/quality` return the same numbers as JSON, and
@@ -128,6 +130,35 @@ A generated pursuit carries a `signal_key` and a re-run updates it in place. `st
 and `campaign_id` belong to whoever is working the pursuit and are never overwritten, and a
 pursuit somebody created by hand is never touched at all.
 
+## Scoring
+
+```bash
+npm run score -- --dry-run
+npm run score
+```
+
+Every open pursuit becomes an `assessment` with one `factor_result` per factor, one
+`gate_result` per gate, and an `evidence_ref` per claim. `/pursuits/<id>` opens the trace.
+
+Four things it does deliberately:
+
+**Weights are rows.** `score_model_factor` holds them and every assessment pins the model
+version it was computed under, so changing a weight makes a new version and never moves a
+past score.
+
+**A failed gate shows no score at all.** Not a low one. The factors are not evaluated, so
+there is nothing to show.
+
+**Unknown, not applicable, and zero are three different things.** A code that matches nothing
+scores zero. No code at all is unknown, keeps its weight in the denominator, and costs
+coverage. A question that does not arise is not applicable and leaves the denominator
+entirely. The strategic fit divides by the **applicable** weight, and coverage below 60
+percent gives no rank at all.
+
+**Three gates report `not_evaluated` rather than `pass`.** There is no clearance data, no
+conflict register, and a notice rarely names its ordering vehicle. A gate nobody checked is
+not a gate that was cleared.
+
 ## Loading a corpus
 
 **No data is in this repository, and none may be.** Gate A came back no on 14 August 2026:
@@ -153,7 +184,7 @@ anything it does not recognise. Every loader is idempotent.
 |---|---|
 | `CIE_Build_Spec_v1.0.md` | The specification. It wins. |
 | `CIE_Phase1_Status.md` | What is built, what the corpus actually said, what is not done. **Not in this repository** — it records findings about real contracts, so it lives with the specification. |
-| `docs/DECISIONS.md` | Fifteen decisions where this departs from the spec, each with the measurement that forced it. |
+| `docs/DECISIONS.md` | Sixteen decisions where this departs from the spec, each with the measurement that forced it. |
 | `docs/BACKLOG.md` | Remaining phases, in dependency order, sized, with the traps in each. |
 | `docs/DEPLOY.md` | Running the interface locally, and putting it on Azure Container Apps. |
 | `docs/GITHUB_SETUP.md` | One-time checklist for putting this on GitHub. |

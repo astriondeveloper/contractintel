@@ -25,6 +25,7 @@ import type { Ctx } from './shell.js';
 
 import { overview, overviewJson } from './pages/overview.js';
 import { upcoming, upcomingJson } from './pages/upcoming.js';
+import { pursuit } from './pages/pursuit.js';
 import { entityDetail, entityList } from './pages/entities.js';
 import { contracts } from './pages/contracts.js';
 import { subcontracts } from './pages/subcontracts.js';
@@ -172,6 +173,22 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
   const route = ROUTES[pathname];
   if (route) {
     const body = await route(ctx);
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(request.method === 'HEAD' ? undefined : body);
+    return;
+  }
+
+  // /pursuits/<id>
+  const pursuitMatch = /^\/pursuits\/(\d{1,19})$/.exec(pathname);
+  if (pursuitMatch) {
+    const body = await pursuit(ctx, pursuitMatch[1]!);
+    if (body === null) {
+      response.writeHead(404, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(
+        errorPage(pathname, 404, 'No such pursuit', `Pursuit ${pursuitMatch[1]} is not in this database.`),
+      );
+      return;
+    }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end(request.method === 'HEAD' ? undefined : body);
     return;

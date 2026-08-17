@@ -398,6 +398,43 @@ silently incomplete pipeline is worse than a short one.
 
 ---
 
+## D16. What the scoring engine refuses to guess
+
+Spec section 10 describes the model. Building it turned four things into decisions, and
+each one is a decision to say "not known" where guessing would have been easier.
+
+**Three gates cannot be evaluated and say so.** There is no facility clearance data in the
+corpus, on the requirement or on Astrion, and no conflict-of-interest register. The vehicle
+a solicitation will be ordered under is rarely stated. Those return `not_evaluated` with a
+reason naming what is missing. **`not_evaluated` is not `pass`**, and the interface shows the
+difference: a gate reported as cleared is a gate nobody checks again.
+
+**The set-aside gate never fails.** The only evidence available is which set-asides Astrion
+has previously been awarded under. Having won under a category is good evidence of holding
+it; never having won under one is not evidence of not holding it, because the company may
+hold a status it has not used or gained one since the export. Failing a pursuit on that
+inference would drop real opportunities silently, and a thing that vanishes leaves no trace
+to notice. So an unrecognised set-aside is `review`: a person checks the status.
+
+**Zero and unknown are kept apart everywhere.** A pursuit whose codes are known and match
+nothing on the profile scores capability zero, because the question was asked and answered.
+A pursuit with no codes at all is `unknown`, keeps its weight in the denominator, and costs
+coverage. The distinction is enforced by the database as well as the code: `factor_result`
+has a check constraint that a score exists only in the `scored` state.
+
+**The rank is the strategic fit and nothing else.** Spec 10.1 gives four outputs and says
+not to merge them, so timing urgency and evidence confidence sit beside the fit on the
+screen and are never folded into it. Ordering by a blend would produce a number that moves
+for reasons nobody can name.
+
+**What this costs, and it is worth stating plainly.** On a corpus where BD Ops has not
+filled in `growth_priority` and the taxonomy carries no technology nodes, two factors worth
+17 of the 100 weight are unanswerable. Coverage is therefore rarely near 100 percent, and
+the floor at 0.60 is doing real work rather than sitting unused. The number goes up when BD
+fills the columns in, which is the intended incentive.
+
+---
+
 ## Open questions
 
 **Gate B — is the GovWin API available?** Owner: Gavin.

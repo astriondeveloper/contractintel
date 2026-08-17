@@ -125,7 +125,7 @@ jobs:
             sleep 1
           done
           status=0
-          for route in / /upcoming '/upcoming?class=active_solicitation' /entities /contracts /subcontracts /customers /programs \
+          for route in / /upcoming '/upcoming?class=active_solicitation' '/upcoming?sort=fit' /entities /contracts /subcontracts /customers /programs \
                        /dacis-contracts /taxonomy /watchlist /review /quality /acceptance \
                        /healthz /api/overview /api/upcoming /api/acceptance /api/quality \
                        /app.css /fonts/Archivo-Regular.woff2; do

@@ -57,6 +57,15 @@ const CLASS_LABEL: Record<string, string> = {
   shaping_target: 'Shaping',
 };
 
+function bandChip(band: string | null) {
+  if (band === 'pursue') return chip('pass', 'Pursue');
+  if (band === 'review') return chip('blocked', 'Review');
+  if (band === 'pass') return chip('neutral', 'Pass');
+  if (band === 'blocked') return chip('fail', 'Blocked');
+  if (band === 'insufficient_evidence') return chip('sky', 'No rank');
+  return ABSENT;
+}
+
 function classChip(signalClass: string | null) {
   if (signalClass === 'active_solicitation') return chip('fail', 'Out now');
   if (signalClass === 'recompete_window') return chip('blocked', 'Recompete');
@@ -68,9 +77,10 @@ export async function upcoming(ctx: Ctx): Promise<string> {
   const search = text(ctx.url, 'q');
   const position = text(ctx.url, 'position');
   const signalClass = text(ctx.url, 'class');
+  const sort = text(ctx.url, 'sort') === 'fit' ? 'fit' : 'when';
 
   const [result, summary, thresholds] = await Promise.all([
-    upcomingSignals(search, position, signalClass, PAGE_SIZE, offset(ctx.url)),
+    upcomingSignals(search, position, signalClass, sort, PAGE_SIZE, offset(ctx.url)),
     upcomingSummary(),
     signalThresholds(),
   ]);
@@ -105,6 +115,11 @@ export async function upcoming(ctx: Ctx): Promise<string> {
     { value: 'active_solicitation', label: `${CLASS_LABEL.active_solicitation!} (${count(summary.active_solicitation)})` },
     { value: 'recompete_window', label: `${CLASS_LABEL.recompete_window!} (${count(summary.recompete_window)})` },
     { value: 'shaping_target', label: `${CLASS_LABEL.shaping_target!} (${count(summary.shaping_target)})` },
+  ]);
+
+  const sortLinks = filterLinks('sort', sort === 'when' ? '' : sort, [
+    { value: '', label: 'By date' },
+    { value: 'fit', label: 'By strategic fit' },
   ]);
 
   const positionLinks = filterLinks('position', position, [
@@ -173,6 +188,7 @@ export async function upcoming(ctx: Ctx): Promise<string> {
         ])}
         ${classLinks}
         ${positionLinks}
+        ${sortLinks}
         ${table({
           columns: [
             { header: 'Stage', cell: (r) => classChip(r.signal_class) },
@@ -189,11 +205,20 @@ export async function upcoming(ctx: Ctx): Promise<string> {
                     : html`${ABSENT}<span class="sub">no date given</span>`,
             },
             {
+              header: 'Fit',
+              cell: (r) =>
+                r.band === null
+                  ? html`<span class="sub">not scored</span>`
+                  : html`${bandChip(r.band)}${r.strategic_fit === null
+                        ? ''
+                        : html`<span class="sub">${Number(r.strategic_fit).toFixed(0)} fit · ${
+                            r.coverage === null ? '?' : (Number(r.coverage) * 100).toFixed(0)
+                          }% covered</span>`}`,
+            },
+            {
               header: 'Opportunity',
               cell: (r) =>
-                html`${r.notice_url
-                    ? html`<a href="${r.notice_url}" rel="noreferrer">${truncate(r.title, 66)}</a>`
-                    : truncate(r.title, 66)}
+                html`<a href="/pursuits/${r.pursuit_id}">${truncate(r.title, 62)}</a>
                   <span class="sub"
                     >${r.solicitation_number
                       ? html`<code>${r.solicitation_number}</code>`
@@ -269,7 +294,7 @@ export async function upcoming(ctx: Ctx): Promise<string> {
 /** The same list as JSON, so a scheduled digest can be built without scraping. */
 export async function upcomingJson(): Promise<unknown> {
   const [result, summary] = await Promise.all([
-    upcomingSignals('', '', '', 500, 0),
+    upcomingSignals('', '', '', 'when', 500, 0),
     upcomingSummary(),
   ]);
   return { summary, signals: result.rows, returned: result.rows.length, total: result.total };

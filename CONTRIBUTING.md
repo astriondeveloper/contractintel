@@ -12,7 +12,7 @@ docker compose up -d db          # PostgreSQL 16
 npm install
 npm run migrate                  # 20 forward-only SQL migrations
 npm run seed                     # the authored seed files, if you have them locally
-npm test                         # 200 tests, on the synthetic seeds in tests/seed/
+npm test                         # 218 tests, on the synthetic seeds in tests/seed/
 npm run accept                   # the twelve acceptance tests from spec section 18
 npm run web                      # the interface, http://localhost:3000
 ```
@@ -115,6 +115,30 @@ If you add a notice type, add it to `NOTICE_TYPES` with the signal class it maps
 `classify` returns null for anything it does not know and the loader counts those and skips
 them, so a new SAM.gov type shows up as a number to look at rather than being filed under
 whatever is nearest.
+
+## Working on the scoring engine
+
+`src/scoring/` is four files: `model.ts` loads the versioned model and the shapes a rule
+returns, `gates.ts` and `factors.ts` hold one function per rule, and `engine.ts` does the
+arithmetic and the writing.
+
+Adding a factor means a row in `score_model_factor` **and** a case in `evaluateFactors`. A
+factor on the model with no rule behind it comes back `unknown` rather than zero, so
+coverage falls and somebody notices, which is the failure mode you want.
+
+Three rules are load bearing and all three are tested:
+
+**Divide by applicable weight, not known weight.** `not_applicable` leaves the denominator;
+`unknown` stays in it. The test asserts the right answer *and* asserts it differs from the
+wrong one, because both are plausible numbers and only one is right. This was defect 2 in
+the Codex baseline.
+
+**A score exists only in the `scored` state.** The database enforces it with a check
+constraint, and a test tries to violate it.
+
+**Nothing invents an answer.** If a rule cannot evaluate something it returns `unknown` or
+`not_evaluated` with a reason naming what is missing. `docs/DECISIONS.md` D16 lists what the
+engine refuses to guess and why.
 
 ## Before you open a pull request
 

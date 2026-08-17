@@ -27,9 +27,23 @@ corrected exports arrive. `fpds_collapse_summary` reads zero when it is done.
 
 ---
 
-## 2. Scoring engine — spec section 10 — large
+## 2. Scoring engine — spec section 10 — large — **built**
 
-**Unblocks acceptance tests 4, 5, 6, 7.** The largest remaining piece.
+**Acceptance tests 4, 5, 6 and 7 pass.** `src/scoring/`, `npm run score`, and the
+`/pursuits/<id>` screen, which is the rule trace test 7 asks for.
+
+Every trap below was real and each is now pinned by a test. The denominator one is asserted
+directly *and* asserted not to equal the wrong answer, because both denominators produce a
+plausible number and only one of them is right. `docs/DECISIONS.md` **D16** records what the
+engine refuses to guess.
+
+Still open from this item: `value_is_shared` is honoured only in that a shared-value DACIS
+contract carries no estimated value into the signal, so no factor derives from a figure
+covering several awardees. Apportioning them properly needs the reconciliation in item 8.
+
+The original entry follows, because the traps it names are still the traps.
+
+---
 
 Already in place: `score_model`, `score_model_factor`, `score_model_gate`,
 `signal_class_threshold`, `assessment`, `factor_result`, `gate_result`, `evidence_ref`, and

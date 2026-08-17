@@ -22,8 +22,14 @@ export interface Page<Row> {
 /**
  * Run a list query and its count in one round trip each.
  *
- * `countSql` counts the same filtered set, so the two take the same parameters and the
- * pager cannot disagree with the table.
+ * `countSql` counts the same filtered set, so by default the two take the same parameters
+ * and the pager cannot disagree with the table.
+ *
+ * `countParams` exists for the one case where they legitimately differ: a list query that
+ * takes a parameter the filter does not use, such as a sort key. Postgres rejects a bind
+ * with more parameters than the statement declares, so the count needs the shorter list.
+ * It is a separate argument rather than an inlined value because a sort key reaching SQL
+ * as a string is how a whitelist becomes an injection two refactors later.
  */
 async function paged<Row>(
   listSql: string,
@@ -31,10 +37,11 @@ async function paged<Row>(
   params: unknown[],
   limit: number,
   offset: number,
+  countParams: unknown[] = params,
 ): Promise<Page<Row>> {
   const [rows, totals] = await Promise.all([
     query<Row extends Record<string, unknown> ? Row : never>(listSql, [...params, limit, offset]),
-    query<{ n: string }>(countSql, params),
+    query<{ n: string }>(countSql, countParams),
   ]);
   return { rows: rows as Row[], total: Number(totals[0]?.n ?? 0) };
 }
@@ -625,6 +632,10 @@ export interface UpcomingRow {
   readonly set_aside_code: string | null;
   readonly notice_url: string | null;
   readonly solicitation_number: string | null;
+  readonly band: string | null;
+  readonly strategic_fit: string | null;
+  readonly coverage: string | null;
+  readonly assessment_id: string | null;
 }
 
 const UPCOMING_FILTER = `
@@ -643,6 +654,7 @@ export function upcomingSignals(
   search: string,
   position: string,
   signalClass: string,
+  sort: string,
   limit: number,
   offset: number,
 ): Promise<Page<UpcomingRow>> {
@@ -652,25 +664,42 @@ export function upcomingSignals(
             p.incumbent_entity_id::text, e.canonical_name as incumbent_name,
             p.incumbent_confidence, p.agency_code, al.label as agency_label,
             p.state, p.owner, p.notice_type, p.response_date, p.posted_date,
-            p.naics_code, p.psc_code, p.set_aside_code, p.notice_url, p.solicitation_number
+            p.naics_code, p.psc_code, p.set_aside_code, p.notice_url, p.solicitation_number,
+            a.band, a.strategic_fit::text, a.coverage::text, a.assessment_id::text
        from pursuit p
        left join entity e on e.entity_id = p.incumbent_entity_id
        left join code_label_current al
               on al.code_type = 'agency' and al.code_value = p.agency_code
+       -- The assessment under the current score model. An assessment computed under an
+       -- older model is kept but not shown here: comparing scores across model versions is
+       -- exactly what pinning the version exists to prevent.
+       left join assessment a
+              on a.pursuit_id = p.pursuit_id
+             and a.score_model_version =
+                 (select score_model_version from score_model where is_current limit 1)
       where ${UPCOMING_FILTER}
       -- Whichever date this signal is actually timed against. A solicitation is timed by
       -- its response deadline and a recompete by the end of the period of performance, and
       -- ordering on one of them alone buries the other class at the bottom of the list.
-      order by coalesce(p.response_date, p.period_end_date) asc nulls last,
-               p.estimated_value desc nulls last, p.pursuit_id
-      limit $4 offset $5`,
+      order by
+        case when $4 = 'fit' then a.rank_value end desc nulls last,
+        case when $4 = 'fit' then p.pursuit_id end,
+        coalesce(p.response_date, p.period_end_date) asc nulls last,
+        p.estimated_value desc nulls last, p.pursuit_id
+      limit $5 offset $6`,
     `select count(*)::text as n
        from pursuit p
        left join entity e on e.entity_id = p.incumbent_entity_id
+       left join assessment a
+              on a.pursuit_id = p.pursuit_id
+             and a.score_model_version =
+                 (select score_model_version from score_model where is_current limit 1)
       where ${UPCOMING_FILTER}`,
-    [search, position, signalClass],
+    [search, position, signalClass, sort],
     limit,
     offset,
+    // The filter uses three of these; `sort` only reaches the order by.
+    [search, position, signalClass],
   );
 }
 
@@ -740,6 +769,157 @@ export function signalThresholds(): Promise<ThresholdRow[]> {
   return query<ThresholdRow>(
     `select signal_class, min_strategic_fit, rhythm, horizon_months_from, horizon_months_to
        from signal_class_threshold order by signal_class`,
+  );
+}
+
+export interface AssessmentRow {
+  readonly assessment_id: string;
+  readonly pursuit_id: string;
+  readonly score_model_version: number;
+  readonly taxonomy_version: number;
+  readonly computed_at: Date;
+  readonly eligibility: string;
+  readonly status: string;
+  readonly band: string | null;
+  readonly strategic_fit: string | null;
+  readonly evidence_confidence: string | null;
+  readonly timing_urgency: string | null;
+  readonly applicable_weight: string | null;
+  readonly known_weight: string | null;
+  readonly coverage: string | null;
+  readonly rank_value: string | null;
+}
+
+export async function currentAssessment(pursuitId: string): Promise<AssessmentRow | null> {
+  const rows = await query<AssessmentRow>(
+    `select assessment_id::text, pursuit_id::text, score_model_version, taxonomy_version,
+            computed_at, eligibility, status, band, strategic_fit::text,
+            evidence_confidence::text, timing_urgency::text, applicable_weight::text,
+            known_weight::text, coverage::text, rank_value::text
+       from assessment
+      where pursuit_id = $1::bigint
+      order by score_model_version desc, computed_at desc
+      limit 1`,
+    [pursuitId],
+  );
+  return rows[0] ?? null;
+}
+
+export interface FactorResultRow {
+  readonly factor_code: string;
+  readonly factor_name: string | null;
+  readonly state: string;
+  readonly score: string | null;
+  readonly weight_applied: string | null;
+  readonly contribution: string | null;
+  readonly rule_id: string;
+  readonly summary: string | null;
+  readonly display_order: number | null;
+}
+
+export function factorResults(assessmentId: string): Promise<FactorResultRow[]> {
+  return query<FactorResultRow>(
+    `select fr.factor_code, smf.factor_name, fr.state, fr.score::text,
+            fr.weight_applied::text, fr.contribution::text, fr.rule_id, fr.summary,
+            smf.display_order
+       from factor_result fr
+       join assessment a on a.assessment_id = fr.assessment_id
+       left join score_model_factor smf
+              on smf.score_model_version = a.score_model_version
+             and smf.factor_code = fr.factor_code
+      where fr.assessment_id = $1::bigint
+      order by smf.display_order nulls last, fr.factor_code`,
+    [assessmentId],
+  );
+}
+
+export interface GateResultRow {
+  readonly gate_code: string;
+  readonly gate_name: string | null;
+  readonly state: string;
+  readonly reason: string | null;
+  readonly rule_id: string;
+}
+
+export function gateResults(assessmentId: string): Promise<GateResultRow[]> {
+  return query<GateResultRow>(
+    `select gr.gate_code, smg.gate_name, gr.state, gr.reason, gr.rule_id
+       from gate_result gr
+       join assessment a on a.assessment_id = gr.assessment_id
+       left join score_model_gate smg
+              on smg.score_model_version = a.score_model_version
+             and smg.gate_code = gr.gate_code
+      where gr.assessment_id = $1::bigint
+      order by smg.display_order nulls last, gr.gate_code`,
+    [assessmentId],
+  );
+}
+
+export interface EvidenceRow {
+  readonly evidence_id: string;
+  readonly factor_code: string | null;
+  readonly gate_code: string | null;
+  readonly source_system: string;
+  readonly source_record_id: string | null;
+  readonly source_uri: string | null;
+  readonly displayed_value: string | null;
+  readonly is_contrary: boolean;
+}
+
+export function evidenceFor(assessmentId: string): Promise<EvidenceRow[]> {
+  return query<EvidenceRow>(
+    `select evidence_id::text, factor_code, gate_code, source_system, source_record_id,
+            source_uri, displayed_value, is_contrary
+       from evidence_ref
+      where assessment_id = $1::bigint
+      order by is_contrary desc, evidence_id`,
+    [assessmentId],
+  );
+}
+
+export interface PursuitDetailRow extends UpcomingRow {
+  readonly office_code: string | null;
+  readonly posted_date: Date | null;
+  readonly generated_by: string | null;
+  readonly generated_at: Date | null;
+  readonly signal_key: string | null;
+}
+
+export async function pursuitDetail(pursuitId: string): Promise<PursuitDetailRow | null> {
+  const rows = await query<PursuitDetailRow>(
+    `select p.pursuit_id::text, p.title, p.signal_class, p.related_piid, p.period_end_date,
+            p.expected_solicitation_fy, p.estimated_value::text, p.astrion_position,
+            p.incumbent_entity_id::text, e.canonical_name as incumbent_name,
+            p.incumbent_confidence, p.agency_code, al.label as agency_label,
+            p.state, p.owner, p.notice_type, p.response_date, p.posted_date,
+            p.naics_code, p.psc_code, p.set_aside_code, p.notice_url, p.solicitation_number,
+            p.office_code, p.generated_by, p.generated_at, p.signal_key,
+            a.band, a.strategic_fit::text, a.coverage::text, a.assessment_id::text
+       from pursuit p
+       left join entity e on e.entity_id = p.incumbent_entity_id
+       left join code_label_current al
+              on al.code_type = 'agency' and al.code_value = p.agency_code
+       left join assessment a
+              on a.pursuit_id = p.pursuit_id
+             and a.score_model_version =
+                 (select score_model_version from score_model where is_current limit 1)
+      where p.pursuit_id = $1::bigint`,
+    [pursuitId],
+  );
+  return rows[0] ?? null;
+}
+
+/** Which profile rows caused this notice to be fetched. The answer to "why is this here". */
+export function profileMatches(pursuitId: string): Promise<
+  { code_type: string; code_value: string; label: string | null; matched_on: string; origin: string }[]
+> {
+  return query(
+    `select op.code_type, op.code_value, op.label, m.matched_on, op.origin
+       from pursuit_profile_match m
+       join opportunity_profile op on op.profile_id = m.profile_id
+      where m.pursuit_id = $1::bigint
+      order by m.matched_on, op.code_value`,
+    [pursuitId],
   );
 }
 

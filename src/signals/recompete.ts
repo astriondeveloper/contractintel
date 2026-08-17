@@ -83,6 +83,8 @@ interface Candidate {
   readonly incumbent_confidence: string | null;
   readonly astrion_position: AstrionPosition;
   readonly set_aside_type: string | null;
+  readonly naics_code: string | null;
+  readonly psc_code: string | null;
 }
 
 interface Threshold {
@@ -153,7 +155,29 @@ async function fpdsCandidates(client: PoolClient, from: number, to: number): Pro
          ) then 'subcontractor'
          else 'none'
        end                                             as astrion_position,
-       cg.set_aside_type
+       cg.set_aside_type,
+       -- The classification codes of the contract itself, so the scoring engine has
+       -- something to match against the capability profile. Without them capability and
+       -- past performance are both unknown, and every recompete comes out as insufficient
+       -- evidence -- true, and useless. The principal code wins where the export marks one.
+       (select cac.code_value
+          from contract_action_classification cac
+          join contract_action ca2 on ca2.contract_action_id = cac.contract_action_id
+         where ca2.awarding_agency_code = cg.awarding_agency_code
+           and coalesce(ca2.idv_piid, '') = cg.idv_piid_key
+           and ca2.piid = cg.piid
+           and cac.code_type = 'naics'
+         order by cac.is_principal desc nulls last, cac.code_value
+         limit 1)                                      as naics_code,
+       (select cac.code_value
+          from contract_action_classification cac
+          join contract_action ca2 on ca2.contract_action_id = cac.contract_action_id
+         where ca2.awarding_agency_code = cg.awarding_agency_code
+           and coalesce(ca2.idv_piid, '') = cg.idv_piid_key
+           and ca2.piid = cg.piid
+           and cac.code_type = 'psc'
+         order by cac.is_principal desc nulls last, cac.code_value
+         limit 1)                                      as psc_code
      from contract_group cg
      left join code_label_current al
             on al.code_type = 'agency' and al.code_value = cg.awarding_agency_code
@@ -199,7 +223,9 @@ async function dacisCandidates(client: PoolClient, from: number, to: number): Pr
          when 'sub'   then 'subcontractor'
          else 'none'
        end                                                      as astrion_position,
-       null::text                                               as set_aside_type
+       null::text                                               as set_aside_type,
+       null::text                                               as naics_code,
+       null::text                                               as psc_code
      from dacis_contract d
      left join dacis_contract_role r on r.dacis_contract_id = d.dacis_contract_id
     where d.end_date is not null
@@ -230,12 +256,12 @@ async function upsert(
        signal_class, title, agency_code, office_code, solicitation_number, related_piid,
        estimated_value, expected_solicitation_fy, incumbent_entity_id, incumbent_confidence,
        astrion_position, signal_key, generated_by, generated_at, source_version_id, state
-       , period_end_date
+       , period_end_date, naics_code, psc_code
      ) values (
        'recompete_window', $1, $2, $3, $4, $5,
        $6::numeric, $7, $8::bigint, $9,
        $10, $11, $12, now(), $13, 'open',
-       $14::date
+       $14::date, $15, $16
      )
      on conflict (signal_key) where signal_key is not null do update set
        title                    = excluded.title,
@@ -249,6 +275,8 @@ async function upsert(
        incumbent_confidence     = excluded.incumbent_confidence,
        astrion_position         = excluded.astrion_position,
        period_end_date          = excluded.period_end_date,
+       naics_code               = excluded.naics_code,
+       psc_code                 = excluded.psc_code,
        generated_by             = excluded.generated_by,
        generated_at             = excluded.generated_at,
        source_version_id        = excluded.source_version_id
@@ -268,6 +296,8 @@ async function upsert(
       SOURCE_SYSTEM,
       sourceVersionId,
       candidate.ends_on,
+      candidate.naics_code,
+      candidate.psc_code,
     ],
   );
 
@@ -366,6 +396,8 @@ export async function detectRecompetes(
         incumbent_entity_id: candidate.incumbent_entity_id,
         astrion_position: candidate.astrion_position,
         set_aside_type: candidate.set_aside_type,
+        naics_code: candidate.naics_code,
+        psc_code: candidate.psc_code,
       });
 
       await upsert(client, candidate, version.sourceVersionId);
