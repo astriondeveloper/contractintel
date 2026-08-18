@@ -28,41 +28,26 @@
  * it never reaches an archived payload.
  */
 import type { PoolClient } from 'pg';
-import { startRun, finishRun, recordVersion, type RunHandle } from '../lib/provenance.js';
+import { startRun, finishRun, type RunHandle } from '../lib/provenance.js';
 import { profileCodes } from '../signals/profile.js';
+import {
+  writeNotice,
+  classify,
+  isoDay,
+  NOTICE_TYPES,
+  DEFAULT_NOTICE_TYPES,
+  type NoticeType,
+  type NormalizedNotice,
+} from './notice.js';
+
+// Re-exported because these are part of this module's published surface and the CLI, the tests and
+// the GovCon loader all reach for them here. The definitions live in notice.ts because both loaders
+// need them and a second copy would drift.
+export { classify, NOTICE_TYPES, DEFAULT_NOTICE_TYPES, type NoticeType };
 
 export const SOURCE_SYSTEM = 'sam_opportunity';
 
 const DEFAULT_BASE = 'https://api.sam.gov/opportunities/v2/search';
-
-/**
- * SAM.gov notice types, and what each one means for how early the work is.
- *
- * The codes are the `ptype` values from the API definition. The signal class is this
- * system's reading of them, and it is the whole reason the type is kept rather than
- * flattened: collapsing a sources sought into "an opportunity" throws away the only field
- * that says there is still time to shape it.
- */
-export const NOTICE_TYPES = {
-  r: { label: 'Sources sought', signalClass: 'shaping_target' },
-  s: { label: 'Special notice', signalClass: 'shaping_target' },
-  i: { label: 'Intent to bundle', signalClass: 'shaping_target' },
-  p: { label: 'Presolicitation', signalClass: 'active_solicitation' },
-  o: { label: 'Solicitation', signalClass: 'active_solicitation' },
-  k: { label: 'Combined synopsis/solicitation', signalClass: 'active_solicitation' },
-  a: { label: 'Award notice', signalClass: 'market_movement' },
-} as const;
-
-export type NoticeType = keyof typeof NOTICE_TYPES;
-
-/**
- * What a default run asks for.
- *
- * Award notices are excluded: they are the largest type by volume and they describe work
- * that is finished, so they are competitive intelligence rather than pipeline. `--include-awards`
- * turns them on when that is what is wanted.
- */
-export const DEFAULT_NOTICE_TYPES: readonly NoticeType[] = ['r', 's', 'i', 'p', 'o', 'k'];
 
 /** SAM.gov rejects a posted range wider than a year. */
 const MAX_RANGE_DAYS = 365;
@@ -146,16 +131,29 @@ function mmddyyyy(date: Date): string {
   return `${month}/${day}/${date.getUTCFullYear()}`;
 }
 
-/** SAM.gov dates arrive as ISO or as a date-time. Only the day is stored. */
-function isoDay(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
-  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
-}
-
-/** A response deadline carries a time and a zone. Postgres holds it as a date. */
-function deadlineDay(value: string | null | undefined): string | null {
-  return isoDay(value);
+/**
+ * One SAM.gov notice as this system stores it.
+ *
+ * The response deadline carries a time and a zone; Postgres holds it as a date, so `isoDay` takes
+ * the day off both it and the posted date.
+ */
+function normalize(noticeId: string, opportunity: SamOpportunity): NormalizedNotice {
+  return {
+    noticeId,
+    rawType: (opportunity.type ?? opportunity.baseType ?? '').trim(),
+    title: opportunity.title ?? null,
+    solicitationNumber: opportunity.solicitationNumber ?? null,
+    agencyCode: opportunity.fullParentPathCode?.split('.')[0] ?? null,
+    officeCode: opportunity.office ?? null,
+    responseDate: isoDay(opportunity.responseDeadLine),
+    postedDate: isoDay(opportunity.postedDate),
+    naicsCode: opportunity.naicsCode ?? null,
+    pscCode: opportunity.classificationCode ?? null,
+    setAsideCode: opportunity.typeOfSetAside ?? null,
+    placeOfPerformanceState: opportunity.placeOfPerformance?.state?.code ?? null,
+    noticeUrl: opportunity.uiLink ?? null,
+    estimatedValue: opportunity.award?.amount ?? null,
+  };
 }
 
 /**
@@ -427,92 +425,22 @@ export async function loadSamOpportunities(
 
   try {
     for (const [noticeId, { opportunity, matches }] of seen) {
-      const rawType = (opportunity.type ?? opportunity.baseType ?? '').trim();
-      const signalClass = classify(rawType);
-      if (signalClass === null) {
+      // The raw notice is archived as SAM.gov returned it, so a mapping bug found later can be
+      // re-derived from what was stored rather than re-fetched against the quota.
+      const result = await writeNotice(
+        client,
+        run,
+        normalize(noticeId, opportunity),
+        opportunity as Record<string, unknown>,
+        matches,
+      );
+
+      if (result === null) {
         skippedUnknownType += 1;
         continue;
       }
 
-      // The whole notice is archived, keyed by hash, so a re-run over unchanged notices
-      // reports unchanged and a corrected notice arrives as a new version.
-      const version = await recordVersion(client, run, noticeId, opportunity as Record<string, unknown>);
-
-      const posted = isoDay(opportunity.postedDate);
-      const deadline = deadlineDay(opportunity.responseDeadLine);
-
-      const { rows } = await client.query<{ pursuit_id: string }>(
-        `insert into pursuit (
-           signal_class, title, notice_id, solicitation_number, agency_code, office_code,
-           response_date, posted_date, notice_type, naics_code, psc_code, set_aside_code,
-           place_of_performance_state, notice_url, estimated_value,
-           signal_key, generated_by, generated_at, source_version_id, state
-         ) values (
-           $1, $2, $3, $4, $5, $6,
-           $7::date, $8::date, $9, $10, $11, $12,
-           $13, $14, $15::numeric,
-           $16, $17, now(), $18, 'open'
-         )
-         on conflict (signal_key) where signal_key is not null do update set
-           signal_class               = excluded.signal_class,
-           title                      = excluded.title,
-           notice_id                  = excluded.notice_id,
-           solicitation_number        = excluded.solicitation_number,
-           agency_code                = excluded.agency_code,
-           office_code                = excluded.office_code,
-           response_date              = excluded.response_date,
-           posted_date                = excluded.posted_date,
-           notice_type                = excluded.notice_type,
-           naics_code                 = excluded.naics_code,
-           psc_code                   = excluded.psc_code,
-           set_aside_code             = excluded.set_aside_code,
-           place_of_performance_state = excluded.place_of_performance_state,
-           notice_url                 = excluded.notice_url,
-           estimated_value            = excluded.estimated_value,
-           generated_by               = excluded.generated_by,
-           generated_at               = excluded.generated_at,
-           source_version_id          = excluded.source_version_id
-         where pursuit.signal_key is not null
-         returning pursuit_id`,
-        [
-          signalClass,
-          (opportunity.title ?? `SAM.gov notice ${noticeId}`).slice(0, 500),
-          noticeId,
-          opportunity.solicitationNumber ?? null,
-          opportunity.fullParentPathCode?.split('.')[0] ?? null,
-          opportunity.office ?? null,
-          deadline,
-          posted,
-          rawType || null,
-          opportunity.naicsCode ?? null,
-          opportunity.classificationCode ?? null,
-          opportunity.typeOfSetAside ?? null,
-          opportunity.placeOfPerformance?.state?.code ?? null,
-          opportunity.uiLink ?? null,
-          // Only an award notice carries a figure. A solicitation has no value until it is
-          // awarded, and inventing one would be worse than leaving it blank.
-          opportunity.award?.amount ?? null,
-          `sam:${noticeId}`,
-          SOURCE_SYSTEM,
-          version.sourceVersionId,
-        ],
-      );
-
-      const pursuitId = rows[0]?.pursuit_id;
-      if (pursuitId !== undefined) {
-        for (const match of matches) {
-          for (const profileId of match.profileIds) {
-            await client.query(
-              `insert into pursuit_profile_match (pursuit_id, profile_id, matched_on)
-               values ($1::bigint, $2::bigint, $3)
-               on conflict do nothing`,
-              [pursuitId, profileId, match.matchedOn],
-            );
-          }
-        }
-      }
-
-      byClass[signalClass] = (byClass[signalClass] ?? 0) + 1;
+      byClass[result.signalClass] = (byClass[result.signalClass] ?? 0) + 1;
       written += 1;
     }
 
@@ -526,30 +454,4 @@ export async function loadSamOpportunities(
     requests, fetched, matched, written, skippedNoNoticeId, skippedUnknownType,
     byClass, codesSearched: searches.length, truncated, run,
   };
-}
-
-/**
- * The notice type as a signal class.
- *
- * SAM.gov spells the type out in `type` ("Sources Sought") and abbreviates it in `ptype`
- * ("r"), and which one arrives depends on the endpoint, so both are accepted. An
- * unrecognised type is skipped and counted rather than guessed at: a new notice type is a
- * thing to look at, not a thing to file under whatever is nearest.
- */
-export function classify(rawType: string): string | null {
-  const value = rawType.trim().toLowerCase();
-  if (value === '') return null;
-
-  const single = NOTICE_TYPES[value as NoticeType];
-  if (single) return single.signalClass;
-
-  if (value.includes('sources sought')) return 'shaping_target';
-  if (value.includes('special notice')) return 'shaping_target';
-  if (value.includes('intent to bundle')) return 'shaping_target';
-  if (value.includes('combined synopsis')) return 'active_solicitation';
-  if (value.includes('presolicitation') || value.includes('pre-solicitation')) return 'active_solicitation';
-  if (value.includes('solicitation')) return 'active_solicitation';
-  if (value.includes('award')) return 'market_movement';
-
-  return null;
 }

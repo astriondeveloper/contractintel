@@ -757,6 +757,141 @@ Running the real loader against it confirmed the whole chain end to end — para
 classification, idempotence on a second run, and that the API key never reaches an archived payload.
 The only untested thing left is a real key.
 
+## D25. Two APIs deliver the same notices, and the notice id is the identity
+
+GovCon API resells SAM.gov opportunities and USAspending awards through one key. That makes it
+overlap almost entirely with what this system already fetches, and the temptation was to pick one
+door and close the other.
+
+**Decision: keep both doors, make the delta endpoint the primary, and let the notice id be the
+identity rather than the API that delivered it.**
+
+The reason to add it is the access pattern, not the content. api.sam.gov cannot answer "what
+changed since": a run must re-search every code on the opportunity profile over a posted-date
+window and re-read notices it already has. That is seventeen requests on this profile against a
+quota measured *per day*. GovCon API's `/opportunities/delta?since=` answers the same question in
+one request against a quota measured *per hour*. The saving is not really the requests — it is that
+**an hourly sync becomes affordable**, and for a tool whose entire premise is catching a
+requirement before anyone else notices it, daily versus hourly is the product.
+
+The reason to keep api.sam.gov is that a single commercial reseller should not be the only path to
+a public data source. It runs weekly now instead of daily, which is cheap and is a real check: if
+the delta stream goes stale or the plan lapses, the weekly run notices.
+
+The non-redundancy is structural rather than procedural. Both loaders write through
+`src/loaders/notice.ts`, and `signal_key` is `sam:<notice_id>` in both, because the notice is a
+SAM.gov notice whichever door it came through. A notice arriving from both converges on one
+`pursuit` row and one feed item; the second loader updates rather than inserts. Neither loader has
+an `insert into pursuit` of its own, which is the only way that guarantee survives somebody adding
+a third source. `source_run.source_system` still differs and `source_version` still archives each
+API's payload in its own shape, so which API delivered which version stays answerable — the
+convergence costs no information.
+
+The alternative considered and rejected: a second notices table per source, reconciled downstream.
+That looked like it was keeping the sources honest and was actually creating a reconciliation
+problem where none needed to exist, plus a way for one person's feed to show the same requirement
+twice.
+
+Rejected too: dropping the FPDS bulk load in favour of GovCon's `/contracts/search`. A bulk extract
+is the right shape for millions of transactions and no API should be asked to re-serve it. The
+contracts endpoints are for the recent tail and for a company the corpus has never seen.
+
+There is a test named `two APIs, one pursuit`. It is the assertion that fails first if the shared
+write path is ever bypassed.
+
+---
+
+## D26. The cursor lives in the database, and a partial run does not move it
+
+An incremental pull needs a high-water mark, and there were three plausible places to keep it: a
+file, an environment variable, or a table.
+
+**Decision: a table, `sync_cursor`, keyed on (source_system, endpoint).**
+
+The container is ephemeral and the job runs on a schedule, so a file or a variable loses the cursor
+on the first restart and the next run silently re-downloads a window it already had. That failure
+has no symptom: the data is correct and the bill is not. A failure with no symptom belongs in a
+table with a name and a comment on the column.
+
+Two rules follow, and both are the conservative choice on purpose.
+
+**The cursor moves to the instant the run started**, not to the newest record seen and not to the
+instant it finished. Newest-record-seen would skip a notice modified while the run was in flight.
+Finished would skip anything modified during the run. Started re-fetches a few seconds of overlap
+every hour, which costs nothing, and cannot skip.
+
+**A run that stopped early does not move the cursor at all.** If the request cap or the rate-limit
+reserve cut a run short, advancing would permanently lose whatever it never reached, with no trace
+that anything was missing. Re-fetching a window is cheap; a hole in an early-warning feed is not.
+
+The related decision is the reserve itself. The hourly allowance is shared by every job, including
+the on-demand screening lookups somebody triggers from a screen. A sync that drains it to zero has
+not failed, but it has taken the interactive lookups down with it, and those are the ones a person
+is waiting on. So the client stops with fifty requests still on the clock and says it did.
+
+---
+
+## D27. A silent clamp is reported as a gap, because a successful run with a hole in it is worse than a failure
+
+The delta endpoint caps `since` at 60 days independently of the plan's historical-search window,
+and a request older than that is clamped *silently* — HTTP 200, correct records, and the interval
+between what was asked for and what was served fetched by nobody.
+
+**Decision: predict the clamp before spending the request, report it as a gap, and store it on the
+cursor.**
+
+The prediction matters because the warning should reach a person before the quota is gone rather
+than in a log line after. The storage matters because the run that had the gap is usually
+unattended: `sync_cursor.last_clamped` and `last_clamp_note` mean `npm run load:govcon -- --cursor`
+can say "the last run was clamped" tomorrow morning.
+
+The subtle part is *which* clamp report to show. The API also reports its own clamp, but it only
+ever sees the already-clamped `since` this loader sent, so its `since_requested` describes the clamp
+rather than the gap. Substituting it would replace "you are missing April to June" with "you asked
+for June and got June", which reads like nothing is wrong. So the local calculation's note stands
+when the clamp was predicted, and the API's is used only when it clamped something unexpected — a
+plan window narrower than the documented 60 days, say. That case is worth hearing verbatim.
+
+---
+
+## D28. Screening is on demand, cached with a clock, and makes no determination
+
+Exclusions and entity registrations are the part of GovCon API that is genuinely new rather than
+cheaper: the corpus can say who held a contract, not whether they are currently debarred or whether
+their registration lapsed last month.
+
+**Decision: never sweep, cache with a short clock, and refuse to decide anything.**
+
+Nothing here runs on a schedule. Screening every company in the corpus would be thousands of
+requests to pre-answer questions nobody asked, against the allowance shared with the hourly notice
+sync. A lookup happens when a person opens a requirement, and the answer is cached so the next
+person to open it pays nothing. That is the whole cost design: the expensive endpoints are only ever
+touched by a human action, and only once per company per freshness window.
+
+The clock is a day for exclusions and a week for registrations. A stale "not excluded" is the most
+dangerous thing this module could return, so the exclusion cache is a courtesy to the quota and
+nothing more. A legal name and a CAGE code do not move, so registrations can sit longer — and the
+expiry *date* is stored rather than evaluated, so an expiry falling inside the window still reads
+correctly off a cached row.
+
+Three things it refuses to do, each because the alternative is confidently wrong:
+
+- **"No match" is not a clearance.** The list matches on the name, UEI or CAGE as given. A company
+  excluded under a different legal name, or a subsidiary, will not appear. The caveat says so on
+  every clean result.
+- **A hit is not a disqualification.** Names collide, and an exclusions match on a common company
+  name is frequently a different company. The row is shown with its UEI, its dates and its excluding
+  agency, and a person reads it.
+- **A null `termination_date` is an indefinite exclusion, not an absent one.** `vendor_exclusion_current`
+  includes it deliberately, and there is a comment on the column, because reading null as clear is
+  the specific error that would matter most.
+
+A name search returns candidates rather than picking one. There is no reliable way to choose between
+"Example Systems Inc" and "Example Systems LLC" from a name, and a tool that picked would be wrong
+quietly — on a hand-off, with somebody's name on it.
+
+---
+
 ---
 
 ## Open questions

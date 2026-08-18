@@ -168,8 +168,9 @@ written off, so the jobs are listed here with the rhythm each one actually wants
 
 | Job | Command | Rhythm | What it fills |
 |---|---|---|---|
-| Targeting profile | `npm run profile` | after each corpus load | The NAICS and PSC codes the SAM.gov search asks for |
-| SAM.gov notices | `npm run load:sam` | daily | The feed's open solicitations and sources sought |
+| Targeting profile | `npm run profile` | after each corpus load | The NAICS and PSC codes both notice searches ask for |
+| Notices, primary | `npm run load:govcon` | **hourly** | The feed's open solicitations and sources sought |
+| Notices, fallback | `npm run load:sam` | weekly | The same notices, as a check that the delta stream has not gone stale |
 | Recompete detection | `npm run signals` | monthly | The feed's recompetes |
 | Scoring | `npm run score` | after each of the above | Every requirement's band and rule trace |
 | Forecast | `npm run forecast` | weekly | The quarterly projection |
@@ -183,25 +184,44 @@ database is right and the cron is stale.
 One job per line, same shape as the load:
 
 ```bash
-for spec in "sam:0 7 * * *:run,load:sam" \
+for spec in "govcon:0 * * * *:run,load:govcon" \
+            "sam:0 7 * * 0:run,load:sam" \
             "signals:0 3 1 * *:run,signals" \
-            "score:30 7 * * *:run,score" \
+            "score:30 * * * *:run,score" \
             "forecast:0 4 * * 1:run,forecast"; do
   name="${spec%%:*}"; rest="${spec#*:}"; cron="${rest%%:*}"; args="${rest##*:}"
   az containerapp job create \
     --name "cie-$name" --resource-group cie --environment cie-env \
     --image <registry>.azurecr.io/cie:latest \
     --trigger-type Schedule --cron-expression "$cron" \
-    --secrets db-url="..." sam-key="..." \
-    --env-vars DATABASE_URL=secretref:db-url PGSSLMODE=require SAM_API_KEY=secretref:sam-key \
+    --secrets db-url="..." sam-key="..." govcon-key="..." \
+    --env-vars DATABASE_URL=secretref:db-url PGSSLMODE=require \
+               SAM_API_KEY=secretref:sam-key GOVCON_API_KEY=secretref:govcon-key \
     --command "npm" --args "$args"
 done
 ```
 
-`SAM_API_KEY` is a Container Apps secret and a secret only. It is read from the environment,
-never written to the database, and a test asserts it never reaches an archived payload. The
-key comes from api.data.gov and has to be registered for the Opportunities API specifically;
-a key that works against another api.data.gov endpoint returns 403 here.
+Both keys are Container Apps secrets and secrets only. They are read from the environment, never
+written to the database, and a test per loader asserts neither reaches an archived payload.
+
+`SAM_API_KEY` comes from api.data.gov and has to be registered for the Opportunities API
+specifically; a key that works against another api.data.gov endpoint returns 403 there.
+
+`GOVCON_API_KEY` comes from govconapi.com and is sent as a bearer token. Note the two different
+failure modes: 401 is a key the API does not recognise, and 403 is a key it recognises on a plan
+that does not include that endpoint or that date range. The second one cannot be fixed by checking
+the key, which is why `--probe` prints the plan and the window rather than just "ok".
+
+**Two things about the hourly job.** It is the only job here that runs hourly, and it is
+affordable only because it is incremental — the cursor in `sync_cursor` is what makes the second
+run of the hour ask for changes rather than for the window again. And the hourly allowance is
+shared with the on-demand screening lookups a person triggers from a screen, so the sync holds
+fifty requests back rather than draining it; a sync that took the interactive lookups down with it
+would be a worse outcome than a sync that missed a few notices until the next hour.
+
+Check `npm run load:govcon -- --cursor` after the first day. A cursor that has not moved means the
+job is not running; a cursor carrying `! the last run was clamped` means a window was missed and
+needs `--backfill`.
 
 **Check it landed rather than assuming it did.** `npm run readiness` prints what the corpus
 can and cannot support, and it is the one command to run after the first full cycle:
@@ -248,6 +268,34 @@ SAM_API_BASE=http://localhost:3999/opportunities/v2/search \
 It answers 401 without a key and 400 without the posted range, because the real endpoint
 does, and the tests inject the fetch function rather than using it — so this is the only thing
 that exercises the actual HTTP path, the parameter shape and the pagination.
+
+### Developing against GovCon API without a key
+
+`npm run govcon:stub` does the same for GovCon API, on port 3998:
+
+```bash
+npm run govcon:stub
+export GOVCON_API_BASE=http://localhost:3998/api/v1 GOVCON_API_KEY=stub
+npm run load:govcon -- --probe
+npm run load:govcon -- --unfiltered
+npm run screen -- ZGCONUEI0002
+```
+
+Same reasoning, and it reproduces the four behaviours easiest to get wrong: 401 without a bearer
+token, 400 on a bare `/opportunities/search`, a silent clamp with a `sync.clamp_reason` block on a
+`since` older than 60 days, and an `X-RateLimit-Remaining` header that counts down so the reserve
+logic actually fires. Every record it serves is invented and ZGCON-prefixed.
+
+The stub is also where the field mapping gets checked. `--sample` prints the field names of the
+first record returned, so on first contact with the live API you can compare them against
+`GovconOpportunity` in `src/loaders/govcon/opportunities.ts` rather than assuming they match:
+
+```bash
+npm run load:govcon -- --dry-run --unfiltered --sample
+```
+
+A field this build does not read is a field not reaching the feed, and that is invisible without
+looking.
 
 ### Health probes
 

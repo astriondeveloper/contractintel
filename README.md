@@ -312,6 +312,72 @@ A generated requirement carries a `signal_key` and a re-run updates it in place.
 follows and actions live in their own tables and are never touched by a detection run, and a
 requirement somebody created by hand is never touched at all.
 
+## Two ways in, and which one owns what
+
+There are two APIs and one corpus behind this, and they overlap. Overlap is the thing to get
+right rather than the thing to avoid, so here is who owns what and why nothing is fetched twice.
+
+| Data | Who owns it | Why | What the others are for |
+|---|---|---|---|
+| Notices, ongoing | **GovCon API delta** — `npm run load:govcon` | `/opportunities/delta?since=` returns only what changed. Quota is hourly. | `load:sam` weekly, as a check that the stream has not gone stale |
+| Notices, first fill | **GovCon API search** — `--backfill` | Takes a date range and the plan's full history window | — |
+| Award history | **the corpus** — `npm run load:fpds` | A bulk extract is the right shape for millions of transactions; no API should be asked to re-serve it | GovCon `/contracts/*` for the recent tail and for a company the corpus has never seen |
+| Entity, UEI, CAGE | **GovCon API**, on demand | Nothing else here has it | — |
+| Exclusions | **GovCon API**, on demand | A live fact about today; a stale answer is the dangerous one | — |
+
+**Why the delta endpoint is the primary.** api.sam.gov has no way to answer "what changed". A
+run there re-searches every code on the profile over a posted-date window and re-reads notices it
+already has — seventeen requests on this profile, against a quota measured per day. GovCon API
+answers the same question in one request out of an allowance twenty-four times larger. That does
+not save much money. What it buys is the thing that matters for an early-warning tool: **the sync
+can run hourly instead of daily.** A sources sought posted at 9am is in somebody's feed by 10.
+
+**Why running both does not duplicate anything.** Both loaders write through
+`src/loaders/notice.ts`, and `signal_key` is `sam:<notice_id>` in both, because the notice is a
+SAM.gov notice whichever door it came through. A notice that arrives from both converges on one
+`pursuit` row and one feed item; whichever loader saw it second updates rather than inserts.
+Provenance still separates them, so which API delivered which version stays answerable. There is
+a test named `two APIs, one pursuit` and it is the assertion that fails first if somebody
+reintroduces a second write path.
+
+```bash
+npm run load:govcon -- --probe     # one request: key, plan, rate limit, search window
+npm run load:govcon                # changes since the stored cursor. Run this hourly.
+npm run load:govcon -- --cursor     # where the last sync got to. No request.
+npm run load:govcon -- --backfill --from 2026-01-01
+```
+
+**The cursor is why the hourly run is cheap and not wasteful.** `sync_cursor` holds the
+high-water mark, in the database rather than in the container, because the container is ephemeral
+and a lost cursor means the next run silently re-downloads a window it already had — data correct,
+bill not. The cursor moves to the instant the run *started*, and only when the run completed: a
+partial run that advanced its cursor would lose whatever it never reached, permanently and without
+a trace.
+
+**The gap you have to be told about.** The delta window is capped at 60 days regardless of plan,
+and a `since` older than that is clamped *silently* — the response succeeds, the records are
+correct, and the interval nobody asked for was never fetched by anybody. The loader detects the
+clamp, records it on the cursor, and prints `! This run had a gap` naming the interval that was
+missed. Fill it with `--backfill`.
+
+**Screening, and why it is not on a schedule.**
+
+```bash
+npm run screen -- --find "Example"     # candidates and their UEIs
+npm run screen -- ZQF7MRQR4KL5         # exclusions in force, plus the SAM.gov registration
+```
+
+Two requests at most, and none when a fresh answer is cached — a day for exclusions, a week for
+registrations. Nothing here sweeps, because screening every company in the corpus would spend the
+hourly allowance answering questions nobody asked, and the allowance is shared with the notice
+sync. A lookup happens when a person is about to hand a requirement to TechnoMile with an
+incumbent named on it, which is the only moment the answer matters.
+
+It makes no determination, and says so every time. "No exclusion matched" is not a clearance —
+the list matches on the name, UEI or CAGE as given, and a company excluded under a different legal
+name will not appear. A hit is not a disqualification either, because names collide. A
+`termination_date` of null is an *indefinite* exclusion and must never be read as an absent one.
+
 ## Scoring
 
 ```bash

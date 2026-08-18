@@ -123,6 +123,73 @@ jobs:
           npm run digest
           npm run readiness
 
+      # The tests inject the fetch function, so the code that actually speaks HTTP — the bearer
+      # header, the envelope, the pagination, the rate-limit headers, the clamp block — is the one
+      # thing they never touch. The committed stubs are what cover it, and they only cover it if
+      # something runs them.
+      - name: Both loaders talk to their stubs over real HTTP
+        run: |
+          npm run profile -- --taxonomy-only
+
+          # Redirected to files, not inherited. A backgrounded stub that keeps the step's stdout
+          # open makes the step hang after its last command instead of finishing, and `npm run`
+          # spawns a child that outlives a kill aimed at npm — so setsid gives each stub its own
+          # process group to kill as a whole.
+          setsid npx tsx scripts/sam-stub.ts    > sam-stub.log    2>&1 & echo $! > sam-stub.pid
+          setsid npx tsx scripts/govcon-stub.ts > govcon-stub.log 2>&1 & echo $! > govcon-stub.pid
+
+          for i in $(seq 1 30); do
+            curl -sf "http://localhost:3999/opportunities/v2/search?api_key=stub&limit=1&postedFrom=01/01/2026&postedTo=01/02/2026" >/dev/null \
+              && curl -sf -H 'Authorization: Bearer stub' http://localhost:3998/api/v1/status >/dev/null \
+              && break
+            sleep 1
+          done
+          # Two separate checks, because they catch different failures and one masks the other.
+          #
+          # A dead process is the one that bites: a stub that exits on EADDRINUSE leaves whatever
+          # already holds the port answering in its place, and the curl below passes happily against
+          # the wrong server. That is how a stale stub serves last week's fixtures to this week's
+          # assertions, which is exactly the false pass this step exists to prevent.
+          kill -0 "$(cat sam-stub.pid)"    2>/dev/null || { echo "::error::the SAM stub died"; cat sam-stub.log; exit 1; }
+          kill -0 "$(cat govcon-stub.pid)" 2>/dev/null || { echo "::error::the GovCon stub died"; cat govcon-stub.log; exit 1; }
+
+          # And stop rather than run seventeen requests against a stub that never came up.
+          curl -sf "http://localhost:3999/opportunities/v2/search?api_key=stub&limit=1&postedFrom=01/01/2026&postedTo=01/02/2026" >/dev/null || { cat sam-stub.log; exit 1; }
+          curl -sf -H 'Authorization: Bearer stub' http://localhost:3998/api/v1/status >/dev/null || { cat govcon-stub.log; exit 1; }
+
+          export SAM_API_BASE=http://localhost:3999/opportunities/v2/search SAM_API_KEY=stub
+          export GOVCON_API_BASE=http://localhost:3998/api/v1 GOVCON_API_KEY=stub
+
+          # Each probe must exit zero against a reachable stub. A probe that cannot tell reachable
+          # from unreachable is worse than no probe.
+          npm run load:sam -- --probe
+          npm run load:govcon -- --probe
+
+          npm run load:govcon -- --dry-run --unfiltered --sample
+          npm run load:govcon -- --unfiltered
+          npm run load:govcon -- --cursor
+          # Twice. The second run must ask for changes since the cursor, not for the window again.
+          npm run load:govcon -- --unfiltered
+          npm run load:govcon -- --backfill --from 2026-01-01
+
+          # The same notice through the direct SAM.gov loader must not produce a second pursuit.
+          npm run load:sam
+
+          npm run screen -- --find Example
+          npm run screen -- ZGCONUEI0002
+
+          kill -- "-$(cat sam-stub.pid)" "-$(cat govcon-stub.pid)" || true
+
+      # Two loaders write notices and key on the same signal_key on purpose (decision D25). A
+      # duplicate here means somebody added a second write path, and the symptom in production is a
+      # person seeing the same requirement twice in their feed with nothing having errored.
+      #
+      # This has to run after the step above, because it asserts against what those loaders actually
+      # wrote — including that the two stubs' shared notice id produced one row and two source
+      # versions.
+      - name: One notice is one requirement, whichever API delivered it
+        run: npm run check:convergence
+
       # Acceptance tests are expected to report blocked items until the remaining phases
       # exist. A FAIL is what must not happen, so that is what is checked.
       - name: Acceptance tests report no failures

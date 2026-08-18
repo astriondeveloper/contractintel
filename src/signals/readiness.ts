@@ -362,6 +362,7 @@ async function sourceSection(client: PoolClient): Promise<Section> {
   );
 
   const samConfigured = (process.env.SAM_API_KEY ?? '').trim() !== '';
+  const govconConfigured = (process.env.GOVCON_API_KEY ?? '').trim() !== '';
   const readings: Reading[] = rows.map((row) => ({
     label: row.source_system,
     value:
@@ -373,19 +374,80 @@ async function sourceSection(client: PoolClient): Promise<Section> {
   }));
 
   readings.push({
+    label: 'GOVCON_API_KEY',
+    value: govconConfigured ? 'configured' : 'not set',
+    meaning: govconConfigured
+      ? 'The primary notice feed can run. Check it with npm run load:govcon -- --probe.'
+      : 'Without it the notice feed falls back to the daily SAM.gov search, so a requirement is ' +
+        'seen a day late rather than an hour late.',
+    concern: !govconConfigured,
+  });
+
+  readings.push({
     label: 'SAM_API_KEY',
     value: samConfigured ? 'configured' : 'not set',
     meaning: samConfigured
-      ? 'The loader can reach SAM.gov.'
+      ? 'The fallback loader can reach SAM.gov directly.'
       : 'Without it the feed carries only what recompete detection found in the corpus, and no ' +
         'notice lag can ever be measured.',
     concern: !samConfigured,
   });
 
+  // The cursor is the one piece of state that can be wrong while every other number looks right: a
+  // cursor that has not moved means the hourly job is not running, and a clamped one means a window
+  // was fetched by nobody. Neither shows up anywhere else.
+  const { rows: cursors } = await client.query<{
+    source_system: string;
+    endpoint: string;
+    cursor_at: Date;
+    hours_behind: string;
+    last_clamped: boolean;
+    last_clamp_note: string | null;
+  }>(
+    `select source_system, endpoint, cursor_at,
+            round(extract(epoch from (now() - cursor_at)) / 3600.0, 1)::text as hours_behind,
+            last_clamped, last_clamp_note
+       from sync_cursor order by source_system, endpoint`,
+  );
+
+  if (govconConfigured && cursors.length === 0) {
+    readings.push({
+      label: 'Delta cursor',
+      value: 'never run',
+      meaning: 'The incremental sync has not run once, so nothing is arriving hourly yet.',
+      concern: true,
+    });
+  }
+
+  for (const cursor of cursors) {
+    const behind = Number(cursor.hours_behind);
+    readings.push({
+      label: `Cursor ${cursor.endpoint}`,
+      value: `${cursor.hours_behind}h behind`,
+      // Two hours is one missed run plus slack. Beyond that the job is not on its schedule.
+      meaning: cursor.last_clamped
+        ? `! clamped, and the gap was never fetched. ${cursor.last_clamp_note ?? ''}`
+        : behind > 2
+          ? 'Further behind than one missed run. The hourly job is probably not running.'
+          : 'Moving on schedule.',
+      concern: cursor.last_clamped || behind > 2,
+    });
+  }
+
+  const clamped = cursors.find((c) => c.last_clamped);
   return {
     title: 'Sources',
     readings,
-    next: samConfigured ? undefined : 'Get a key from api.data.gov, registered for the Opportunities API.',
+    next:
+      clamped !== undefined
+        ? 'Fill the gap: npm run load:govcon -- --backfill --from <yyyy-mm-dd>'
+        : !govconConfigured
+          ? 'Get a key at govconapi.com, then npm run load:govcon -- --probe'
+          : !samConfigured
+            ? 'Get a key from api.data.gov, registered for the Opportunities API.'
+            : cursors.length === 0
+              ? 'Run the sync once: npm run load:govcon'
+              : undefined,
   };
 }
 

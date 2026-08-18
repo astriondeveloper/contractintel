@@ -116,25 +116,92 @@ Styling follows the Astrion 2026 Brand Evolution: dark first, Astrion Black behi
 Deep Space cards, Alabaster type, Astrion Sky for anything interactive, and the three-stop
 gradient only as the thin rule at the top edge.
 
-## Working on the SAM.gov loader
+## Working on either notice loader
 
-`loadSamOpportunities` takes its HTTP call as a parameter, so the tests hand it recorded
-pages and never touch the network or need a key. That is also how to develop against it:
-point `SAM_API_BASE` at a local stub and `SAM_API_KEY` at anything.
+There are two, and the first thing to know is why: `src/loaders/sam.ts` asks api.sam.gov directly and
+`src/loaders/govcon/opportunities.ts` asks GovCon API's delta endpoint. They fetch the same federal
+notices. Decision D25 has the reasoning; the short version is that api.sam.gov cannot answer "what
+changed since", so it costs seventeen requests a day, and GovCon API can, so an hourly sync becomes
+affordable.
 
-Two properties are load bearing and both are tested.
+**Neither one writes `pursuit`.** Both go through `writeNotice` in `src/loaders/notice.ts`, and
+`signal_key` is `sam:<notice_id>` in both, so a notice arriving from both converges on one row rather
+than appearing twice in somebody's feed. If you add a third source, add a `normalize` for it and call
+`writeNotice` — do not write the table. `npm run check:convergence` fails the build if any loader
+outside `notice.ts` contains an `insert into pursuit`, and it also fails if no notice in the database
+was ever delivered by two sources, because a convergence check that never sees an overlap is not
+checking anything.
 
-**The search is targeted.** It asks only for codes on `opportunity_profile`, and it refuses
-to run at all when the profile is empty rather than falling back to searching for
-everything. A test asserts that every code the loader asks for is on the profile.
+Both loaders take their HTTP call as a parameter, so the tests hand them recorded pages and never
+touch the network or need a key. That is also how to develop against them — but prefer the committed
+stubs, which exercise the real HTTP path that the injected fetch by definition does not:
 
-**The key never lands in the database.** `source_version` archives the whole notice, so a
-test asserts the key does not appear in any archived payload.
+```bash
+npm run sam:stub                                    # port 3999
+npm run govcon:stub                                 # port 3998
+export SAM_API_BASE=http://localhost:3999/opportunities/v2/search SAM_API_KEY=stub
+export GOVCON_API_BASE=http://localhost:3998/api/v1 GOVCON_API_KEY=stub
+npm run load:govcon -- --probe
+```
 
-If you add a notice type, add it to `NOTICE_TYPES` with the signal class it maps to.
-`classify` returns null for anything it does not know and the loader counts those and skips
-them, so a new SAM.gov type shows up as a number to look at rather than being filed under
-whatever is nearest.
+**When you first point either one at a live API, run `--probe` before anything else.** It spends one
+request and tells you whether the failure is the key, the plan or the network — three problems that
+look identical from inside the process and are fixed by three different people. Then run with
+`--sample`, which prints the field names of the first record so you can check the mapping against
+`GovconOpportunity` rather than assume it. A field the build does not read is a field not reaching
+the feed, and nothing else makes that visible.
+
+Three things specific to the GovCon loader.
+
+**The cursor.** `sync_cursor` holds the high-water mark. It advances to the instant the run *started*
+and only when the run finished; a partial run leaves it alone, because advancing would permanently
+lose whatever the run never reached. If you change the sync, that invariant is the one to preserve —
+there is a test named `does not move the cursor when the run stopped early`.
+
+**The clamp.** The delta window is 60 days regardless of plan and a `since` older than that is
+clamped *silently*. The loader predicts the clamp before spending the request, reports the interval
+that was missed rather than the one that was served, and records it on the cursor. Read D27 before
+touching that logic; the obvious simplification (trust the API's own clamp report) makes the message
+say the opposite of what it should.
+
+**The reserve.** The hourly allowance is shared with the on-demand screening lookups a person
+triggers from a screen, so the client stops with fifty requests in hand. A sync that drained the
+allowance would take the interactive lookups down with it.
+
+Two properties are load bearing on both loaders and both are tested.
+
+**The search is targeted.** Each asks only for codes on `opportunity_profile`, and refuses to run at
+all when the profile is empty rather than falling back to searching for everything. A test asserts
+that every code a loader asks for is on the profile. The GovCon loader has an `--unfiltered` mode that
+pulls the whole delta, and it applies the same profile filter locally — it is a different place to
+filter, not a decision to stop filtering.
+
+**The key never lands in the database.** `source_version` archives the whole notice, so a test per
+loader asserts its key does not appear in any archived payload.
+
+If you add a notice type, add it to `NOTICE_TYPES` in `src/loaders/notice.ts` with the signal class
+it maps to — one list, shared, because two copies would drift and the two loaders would disagree
+about the same notice. `classify` returns null for anything it does not know and both loaders count
+those and skip them, so a new notice type shows up as a number to look at rather than being filed
+under whatever is nearest. Note that api.sam.gov abbreviates the type (`r`) and GovCon API spells it
+out (`Sources Sought`), which is why `classify` has both a code arm and a substring arm.
+
+## Working on screening
+
+`src/loaders/govcon/screening.ts` answers "is this company debarred" and "what is its UEI". It is the
+only part of the integration that is on-demand rather than scheduled, and that is deliberate: a sweep
+would spend the shared hourly allowance pre-answering questions nobody asked. Read D28 before adding
+anything here, because the constraints are about what it must refuse to conclude rather than about
+what it fetches:
+
+- "No match" is not a clearance. Every clean result carries the caveat saying so.
+- A hit is not a disqualification. Names collide.
+- A null `termination_date` is an *indefinite* exclusion. Never read it as absent.
+
+The caveats come from `caveatsFor`, which is a function of the result rather than a constant, and
+there are tests asserting the clean case says `not a clearance` and the hit case says `makes no
+determination`. Those are not decoration — they are the difference between a screening tool and a
+tool that quietly filters out real opportunities on a name collision.
 
 Letting this run has a second effect worth knowing: `office_notice_lag` measures the days between a
 notice being posted and the award being signed, from solicitation numbers that appear in both
