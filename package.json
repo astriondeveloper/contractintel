@@ -25,6 +25,7 @@
     "profile": "tsx src/signals/run-profile.ts",
     "load:sam": "tsx src/loaders/run-sam.ts",
     "load:govcon": "tsx src/loaders/govcon/run-govcon.ts",
+    "load:contracts": "tsx src/loaders/govcon/run-contracts.ts",
     "screen": "tsx src/loaders/govcon/run-screen.ts",
     "score": "tsx src/scoring/run-score.ts",
     "forecast": "tsx src/forecast/run-forecast.ts",

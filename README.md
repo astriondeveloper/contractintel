@@ -321,9 +321,75 @@ right rather than the thing to avoid, so here is who owns what and why nothing i
 |---|---|---|---|
 | Notices, ongoing | **GovCon API delta** — `npm run load:govcon` | `/opportunities/delta?since=` returns only what changed. Quota is hourly. | `load:sam` weekly, as a check that the stream has not gone stale |
 | Notices, first fill | **GovCon API search** — `--backfill` | Takes a date range and the plan's full history window | — |
-| Award history | **the corpus** — `npm run load:fpds` | A bulk extract is the right shape for millions of transactions; no API should be asked to re-serve it | GovCon `/contracts/*` for the recent tail and for a company the corpus has never seen |
+| Award **history** | **the corpus** — `npm run load:fpds` | Fifteen years of transactions, which is what a recompete rhythm is learned from | — |
+| Award **recency** | **GovCon API** — `npm run load:contracts` | Refreshed daily, so last week's award is here without waiting for an extract | — |
+| One company's full history | **GovCon API** — `load:contracts --uei` | `companies/{uei}/awards` is not window-gated. Pro tier. | — |
 | Entity, UEI, CAGE | **GovCon API**, on demand | Nothing else here has it | — |
 | Exclusions | **GovCon API**, on demand | A live fact about today; a stale answer is the dangerous one | — |
+
+### Why the API cannot replace the corpus
+
+This is the one thing to be clear about before wiring contract data, because the API looks like a
+drop-in replacement for the extract and is not one. Its FPDS coverage is comprehensive from
+**October 2024** onward and a sparse backfill before that.
+
+Two things need real depth, and the arithmetic is what settles it rather than a judgement call:
+
+**Recompete cadence.** `office_recompete_cadence` learns an office's rhythm from follow-on chains. A
+chain needs a contract that *ended* plus a successor starting within `[end − 180d, end + 365d]`;
+`MIN_CADENCE_CHAINS` is 3 and a usable interval is at least 365 days. You cannot observe three
+separate lineages each turning over on a year-or-more interval inside a window that only opens in late
+2024. So an API-only corpus learns approximately no cadence, and every projection falls back to the
+365-day default lead time.
+
+**The backtest.** `forecast:backtest` scores a projection made as of a past date against what actually
+happened next. With no history before the as-of date there is nothing to project from, so the number
+that tells you whether to believe the forecast cannot be computed at all.
+
+`npm run readiness` now breaks the corpus down by source and by the history each one spans, so a
+shallow API-sourced corpus cannot pass for history:
+
+```
+  History it spans                   17.5 years
+    from govcon_contract             3 actions, 1.0 years
+                                      Recency and breadth. Comprehensive from October 2024 only,
+                                      so it cannot supply the depth a cadence needs however many
+                                      actions it carries.
+    from fpds                        48,645 actions, 17.5 years
+                                      Deep enough for a five-year rhythm to appear three times in
+                                      one office.
+```
+
+The exception is `--uei`, which uses `companies/{uei}/awards`. That endpoint is ungated by the plan
+window and returns a company's full history — real depth, but per company rather than per office.
+Enough to complete Astrion's own incumbency and a named competitor set; not enough to learn how a
+contracting office behaves.
+
+### Contract actions
+
+```bash
+npm run load:contracts -- --dry-run --from 2024-11-01 --sample
+npm run load:contracts                       # since the stored cursor
+npm run load:contracts -- --uei ZQF7MRQR4KL5  # one company's full history (Pro)
+```
+
+Transactions arriving here and from the bulk extract converge on one `contract_action` row, keyed on
+spec 7.2's composite, so running both never double-counts an obligation. Both go through
+`src/loaders/contract.ts`, which is also what guarantees an API-sourced transaction gets the same
+entity resolution, classifications and code labels a CSV-sourced one does rather than quietly less.
+
+**The one refusal worth knowing about.** `/contracts/{piid}` returns the latest transaction *plus* a
+`transaction_rollup` summing every action on that PIID. Written into `contract_action` that would put a
+whole contract's obligation on a single row: `cie_award_shape_asof` would compute the wrong shape,
+campaign sizing would double-count, and nothing would error. The loader refuses any record carrying a
+rollup marker and reports the count. There is a test asserting three transactions totalling $7.7m are
+read as $7.7m and not as the rollup's $31m.
+
+GovCon API also supplies `contract_award_unique_key`, which is globally unique and would resolve
+exactly the PIID ambiguity that decision D13 works around. It is **stored and not acted on**:
+`contract_award_key_agreement` measures whether it agrees with the current grouping. Changing how
+contracts are grouped would silently move the forecast, the lineages and every campaign figure, so
+that is a decision for evidence rather than for a field name.
 
 **Why the delta endpoint is the primary.** api.sam.gov has no way to answer "what changed". A
 run there re-searches every code on the profile over a posted-date window and re-reads notices it

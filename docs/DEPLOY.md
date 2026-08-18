@@ -171,6 +171,7 @@ written off, so the jobs are listed here with the rhythm each one actually wants
 | Targeting profile | `npm run profile` | after each corpus load | The NAICS and PSC codes both notice searches ask for |
 | Notices, primary | `npm run load:govcon` | **hourly** | The feed's open solicitations and sources sought |
 | Notices, fallback | `npm run load:sam` | weekly | The same notices, as a check that the delta stream has not gone stale |
+| Contract actions | `npm run load:contracts` | daily | Award recency: end dates and obligations for work awarded since the last extract |
 | Recompete detection | `npm run signals` | monthly | The feed's recompetes |
 | Scoring | `npm run score` | after each of the above | Every requirement's band and rule trace |
 | Forecast | `npm run forecast` | weekly | The quarterly projection |
@@ -185,6 +186,7 @@ One job per line, same shape as the load:
 
 ```bash
 for spec in "govcon:0 * * * *:run,load:govcon" \
+            "contracts:0 6 * * *:run,load:contracts" \
             "sam:0 7 * * 0:run,load:sam" \
             "signals:0 3 1 * *:run,signals" \
             "score:30 * * * *:run,score" \

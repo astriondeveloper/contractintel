@@ -211,6 +211,100 @@ const EXCLUSIONS: readonly Record<string, unknown>[] = [
   },
 ];
 
+/**
+ * Contract transactions, and one rollup the loader must refuse.
+ *
+ * Three ordinary transactions on one PIID — a base award and two modifications, which is the shape
+ * `cie_award_shape_asof` reads to find an end date — plus a fourth record carrying
+ * `transaction_rollup`. That last one is the hazard: written as a transaction it would put a whole
+ * contract's obligation on a single row and every downstream sum would be wrong without anything
+ * failing. The loader must skip it and count it.
+ */
+const CONTRACTS: readonly Record<string, unknown>[] = [
+  {
+    contract_award_unique_key: 'CONT_AWD_ZSTUBPIID001_9700_-NONE-_-NONE-',
+    piid: 'ZSTUBPIID001',
+    modification_number: '',
+    transaction_number: '',
+    awarding_agency_code: '9700',
+    awarding_department_code: '97',
+    awarding_office_code: 'ZOFF02',
+    awarding_agency_name: 'Example Defense Department',
+    awarding_office_name: 'Example Test Office',
+    award_type: 'C',
+    action_date: isoDaysAgo(400),
+    signed_date: isoDaysAgo(400),
+    period_of_performance_start_date: isoDaysAgo(390),
+    period_of_performance_current_end_date: isoDaysAhead(90),
+    period_of_performance_potential_end_date: isoDaysAhead(455),
+    federal_action_obligation: 4200000,
+    base_and_all_options_value: 18500000,
+    extent_competed: 'A',
+    type_of_set_aside: 'SBA',
+    number_of_offers_received: 3,
+    recipient_name: 'Example Systems Incorporated',
+    recipient_uei: 'ZGCONUEI0001',
+    recipient_cage_code: 'ZG001',
+    naics_code: '541330',
+    naics_description: 'Engineering Services',
+    product_or_service_code: 'ZT2',
+    product_or_service_code_description: 'Example engineering support',
+    primary_place_of_performance_state_code: 'CA',
+  },
+  {
+    // Same award key as the base action and the other modification. The key identifies the
+    // award, not the transaction, so every modification on a PIID carries one value.
+    contract_award_unique_key: 'CONT_AWD_ZSTUBPIID001_9700_-NONE-_-NONE-',
+    piid: 'ZSTUBPIID001',
+    modification_number: 'P00001',
+    awarding_agency_code: '9700',
+    awarding_office_code: 'ZOFF02',
+    award_type: 'C',
+    signed_date: isoDaysAgo(200),
+    period_of_performance_current_end_date: isoDaysAhead(90),
+    period_of_performance_potential_end_date: isoDaysAhead(455),
+    federal_action_obligation: 1100000,
+    recipient_name: 'Example Systems Incorporated',
+    recipient_uei: 'ZGCONUEI0001',
+    naics_code: '541330',
+    product_or_service_code: 'ZT2',
+  },
+  {
+    // A modification that extends the end date. The forecast projects from the ultimate date, so an
+    // extension arriving here has to move the projection rather than be ignored.
+    contract_award_unique_key: 'CONT_AWD_ZSTUBPIID001_9700_-NONE-_-NONE-',
+    piid: 'ZSTUBPIID001',
+    modification_number: 'P00002',
+    awarding_agency_code: '9700',
+    awarding_office_code: 'ZOFF02',
+    award_type: 'C',
+    signed_date: isoDaysAgo(30),
+    period_of_performance_current_end_date: isoDaysAhead(275),
+    period_of_performance_potential_end_date: isoDaysAhead(640),
+    federal_action_obligation: 2400000,
+    recipient_name: 'Example Systems Incorporated',
+    recipient_uei: 'ZGCONUEI0001',
+    naics_code: '541330',
+    product_or_service_code: 'ZT2',
+  },
+  {
+    // The rollup. Refused on purpose — see isRollup in src/loaders/govcon/contracts.ts.
+    contract_award_unique_key: 'CONT_AWD_ZSTUBPIID002_9700_-NONE-_-NONE-',
+    piid: 'ZSTUBPIID002',
+    awarding_agency_code: '9700',
+    awarding_office_code: 'ZOFF02',
+    award_type: 'C',
+    signed_date: isoDaysAgo(150),
+    period_of_performance_potential_end_date: isoDaysAhead(300),
+    total_dollars_obligated: 31000000,
+    transaction_rollup: { total_obligated: 31000000, transaction_count: 14 },
+    recipient_name: 'Example Holdings LLC',
+    recipient_uei: 'ZGCONUEI0002',
+    naics_code: '541330',
+    product_or_service_code: 'ZT2',
+  },
+];
+
 interface Answer {
   readonly status: number;
   readonly body: unknown;
@@ -303,6 +397,71 @@ function route(pathname: string, params: URLSearchParams): Answer {
     return page(matching, limit, offset, { filters_applied: Object.fromEntries(params) });
   }
 
+  if (pathname === '/api/v1/contracts/search') {
+    const filters = [...params.keys()].filter((k) => !['limit', 'offset'].includes(k));
+    if (filters.length === 0) {
+      return { status: 400, body: { error: 'at least one filter is required', message: 'try naics=541330' } };
+    }
+    const naics = params.get('naics');
+    const from = params.get('date_from');
+    const to = params.get('date_to');
+    const matching = CONTRACTS.filter((c) => {
+      if (naics !== null && c.naics_code !== naics) return false;
+      const signed = String(c.signed_date ?? '');
+      if (from !== null && signed !== '' && signed < from) return false;
+      if (to !== null && signed !== '' && signed > to) return false;
+      return true;
+    });
+    return page(matching, limit, offset, { filters_applied: Object.fromEntries(params) });
+  }
+
+  const modsOf = /^\/api\/v1\/contracts\/([^/]+)\/modifications$/.exec(pathname);
+  if (modsOf !== null) {
+    const piid = decodeURIComponent(modsOf[1]!);
+    // Oldest action first, as the guide describes, and rollup-free: this endpoint returns
+    // transactions.
+    const matching = CONTRACTS.filter((c) => c.piid === piid && c.transaction_rollup === undefined).sort(
+      (a, b) => String(a.signed_date).localeCompare(String(b.signed_date)),
+    );
+    return page(matching, limit, offset, { filters_applied: { piid } });
+  }
+
+  const detailOf = /^\/api\/v1\/contracts\/([^/]+)$/.exec(pathname);
+  if (detailOf !== null) {
+    const piid = decodeURIComponent(detailOf[1]!);
+    const actions = CONTRACTS.filter((c) => c.piid === piid);
+    if (actions.length === 0) return { status: 404, body: { error: 'not found' } };
+    // The detail endpoint returns the latest transaction plus a rollup across all of them. Reproduced
+    // exactly, because a loader that reads this endpoint and writes what it gets is the failure the
+    // rollup guard exists for.
+    const latest = actions[actions.length - 1]!;
+    return {
+      status: 200,
+      body: {
+        data: [
+          {
+            ...latest,
+            transaction_rollup: {
+              total_obligated: actions.reduce(
+                (sum, a) => sum + Number(a.federal_action_obligation ?? 0),
+                0,
+              ),
+              transaction_count: actions.length,
+            },
+          },
+        ],
+        _sources: ['usaspending_fpds'],
+      },
+    };
+  }
+
+  const awardsOf = /^\/api\/v1\/companies\/([A-Za-z0-9]{12})\/awards$/.exec(pathname);
+  if (awardsOf !== null) {
+    const uei = awardsOf[1]!;
+    const matching = CONTRACTS.filter((c) => c.recipient_uei === uei && c.transaction_rollup === undefined);
+    return page(matching, limit, offset, { filters_applied: { uei } });
+  }
+
   if (pathname === '/api/v1/exclusions/search') {
     const uei = params.get('uei');
     const cage = params.get('cage');
@@ -376,5 +535,8 @@ server.listen(PORT, () => {
   console.log('  GOVCON_API_BASE=http://localhost:' + PORT + '/api/v1 \\');
   console.log('    GOVCON_API_KEY=stub npm run load:govcon -- --probe');
   console.log('');
-  console.log(`  ${NOTICES.length} notices, ${ENTITIES.length} entities, ${EXCLUSIONS.length} exclusions. All invented.`);
+  console.log(
+    `  ${NOTICES.length} notices, ${CONTRACTS.length} contract actions (one of them a rollup the ` +
+      `loader must refuse), ${ENTITIES.length} entities, ${EXCLUSIONS.length} exclusions. All invented.`,
+  );
 });

@@ -13,14 +13,19 @@
  * whatever is actually in the database after the loaders have run over real HTTP, which is the claim
  * that matters and the one an injected fetch cannot make.
  *
- * Three checks, and the third is the one that stops this becoming decoration:
+ * The checks, and the third is the one that stops this becoming decoration:
  *
  *   1. No notice id appears on more than one pursuit.
- *   2. No loader outside src/loaders/notice.ts writes pursuit directly.
+ *   2. No loader writes pursuit or contract_action outside its shared write path.
  *   3. At least one notice was in fact delivered by more than one source system.
+ *   4. Which sources supplied contract actions, reported rather than failed.
  *
  * Without the third, a run where the two sources happened not to overlap passes without having
  * tested anything. CI arranges the overlap by having both stubs serve one notice id in common.
+ *
+ * Contract actions get a report rather than an assertion because their primary key already makes a
+ * duplicate impossible; the risk there is a second write path skipping entity resolution, which check
+ * 2 covers, and a corpus drawn from one source only is a legitimate state rather than a fault.
  *
  * Exits non-zero on a failure and says which check failed and what to do about it.
  */
@@ -28,8 +33,21 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { pool, closePool } from '../src/db/index.js';
 
-/** The one file allowed to write `pursuit` from a loader. */
-const WRITE_PATH = join('src', 'loaders', 'notice.ts');
+/**
+ * The one file allowed to write each table from a loader.
+ *
+ * Two tables, two shared write paths, same reason. `pursuit` is the riskier of the two because
+ * `signal_key` is a partial unique index rather than the primary key, so a second write path there can
+ * physically create a duplicate row. `contract_action` is protected by its primary key, so a duplicate
+ * is impossible — but a second write path could still skip entity resolution or the classification
+ * table and produce a row that is present and useless, which is why it is checked too.
+ */
+const WRITE_PATHS: Record<string, string> = {
+  pursuit: join('src', 'loaders', 'notice.ts'),
+  contract_action: join('src', 'loaders', 'contract.ts'),
+};
+
+const WRITE_PATH = WRITE_PATHS.pursuit!;
 
 function tsFilesUnder(directory: string): string[] {
   const found: string[] = [];
@@ -95,23 +113,55 @@ async function main(): Promise<void> {
         notes.push(`${row.notice_id} arrived from ${row.apis} source systems (${row.systems}) and is one pursuit.`);
       }
     }
+
+    // 4. Contract actions, reported rather than failed.
+    //
+    // The primary key already makes a duplicate contract_action impossible, so unlike notices there is
+    // no data condition to fail on — the risk is a second write path producing a row that is present
+    // but unresolved, and the source check below is what catches that. This reports whether the
+    // overlap has been exercised at all, which is worth knowing without being worth blocking a build:
+    // a corpus loaded only from an extract, or only from the API, is a legitimate state.
+    const { rows: actionSources } = await client.query<{ source_system: string; actions: string }>(
+      `select v.source_system, count(*)::text as actions
+         from contract_action a
+         join source_version v on v.source_version_id = a.source_version_id
+        group by v.source_system
+        order by v.source_system`,
+    );
+
+    if (actionSources.length === 0) {
+      notes.push('No contract action carries provenance yet, so nothing to compare across sources.');
+    } else {
+      notes.push(
+        'contract_action by source: ' +
+          actionSources.map((s) => `${s.source_system} ${s.actions}`).join(', ') +
+          (actionSources.length > 1
+            ? '. Both sources present; the natural key is what keeps them one row per transaction.'
+            : '. One source only, which is a legitimate state.'),
+      );
+    }
   } finally {
     client.release();
   }
 
   // 2. The structural guarantee, checked in the source rather than in the data, because this is the
   // change somebody would make and the data would only show it once the two sources overlapped.
-  const offenders = tsFilesUnder(join('src', 'loaders'))
-    .filter((path) => path !== WRITE_PATH)
-    .filter((path) => /insert\s+into\s+pursuit\b/i.test(readFileSync(path, 'utf8')));
+  const loaderFiles = tsFilesUnder(join('src', 'loaders'));
 
-  if (offenders.length > 0) {
-    failures.push(
-      `${offenders.join(', ')} write(s) pursuit directly. Route it through writeNotice in ` +
-        `${WRITE_PATH} instead: the convergence only holds while there is one write path.`,
-    );
-  } else {
-    notes.push(`Every loader writes pursuit through ${WRITE_PATH} and nowhere else.`);
+  for (const [table, writePath] of Object.entries(WRITE_PATHS)) {
+    const pattern = new RegExp(`insert\\s+into\\s+${table}\\b`, 'i');
+    const offenders = loaderFiles
+      .filter((path) => path !== writePath)
+      .filter((path) => pattern.test(readFileSync(path, 'utf8')));
+
+    if (offenders.length > 0) {
+      failures.push(
+        `${offenders.join(', ')} write(s) ${table} directly. Route it through ${writePath} instead: ` +
+          'the convergence only holds while there is one write path per table.',
+      );
+    } else {
+      notes.push(`Every loader writes ${table} through ${writePath} and nowhere else.`);
+    }
   }
 
   console.log('');
@@ -120,7 +170,7 @@ async function main(): Promise<void> {
   console.log('');
 
   if (failures.length > 0) {
-    console.log(`  ${failures.length} of 3 checks failed.`);
+    console.log(`  ${failures.length} check(s) failed.`);
     process.exitCode = 1;
   } else {
     console.log('  One notice is one requirement, whichever API delivered it.');

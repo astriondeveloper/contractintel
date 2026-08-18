@@ -186,6 +186,50 @@ those and skip them, so a new notice type shows up as a number to look at rather
 under whatever is nearest. Note that api.sam.gov abbreviates the type (`r`) and GovCon API spells it
 out (`Sources Sought`), which is why `classify` has both a code arm and a substring arm.
 
+## Working on either contract loader
+
+Same shape as the notice loaders and the same rule: `src/loaders/fpds.ts` reads a bulk extract,
+`src/loaders/govcon/contracts.ts` asks the API, and **neither writes `contract_action`**. Both go
+through `writeContractAction` in `src/loaders/contract.ts`, on spec 7.2's natural key
+`(awarding_agency_code, piid, modification_number, transaction_number)`, so a transaction arriving from
+both updates one row rather than doubling its obligation in every sum downstream.
+
+That shared path also owns entity resolution, the classification rows and the code-label tally. Those
+are the three things that make an API-sourced transaction as useful as a CSV-sourced one rather than
+quietly less: a row with an unresolved vendor cannot say whether Astrion is the incumbent, a row with
+no classification cannot reach a campaign, and a code with no observed label displays as a bare number.
+
+Three things to know before changing the API loader.
+
+**The rollup guard is not optional.** `/contracts/{piid}` returns the latest transaction plus a
+`transaction_rollup` summing every action on the PIID. Writing that as a transaction puts a whole
+contract's obligation on one row, and then `cie_award_shape_asof` reports the wrong shape and campaign
+sizing double-counts, with nothing failing. `isRollup` refuses on the presence of a marker rather than
+on a judgement about the numbers — a false refusal costs one transaction and shows up in
+`skippedRollup`, a false accept corrupts the corpus silently.
+
+**The two end dates are not interchangeable.** `period_of_performance_current_end_date` maps to
+`current_completion_date` and `..._potential_end_date` to `ultimate_completion_date`. The forecast
+projects from the ultimate date, so swapping them moves every projection by the length of the option
+years and nothing looks broken. There is a test.
+
+**It cannot supply history, whatever it looks like.** Coverage begins October 2024. Recompete cadence
+needs three follow-on chains per office at intervals over a year, which that window cannot contain, and
+the backtest needs history before its as-of date. `npm run readiness` breaks the corpus down by source
+and span so this is visible rather than assumed. `--uei` is the exception: `companies/{uei}/awards` is
+ungated and gives real depth, per company.
+
+**If you clear a table by hand, clear its provenance too.** The hash skip is keyed on
+`source_version`, not on the destination table, so `delete from contract_action` on its own leaves the
+next run reporting every row as unchanged and never rewriting them. The archive is authoritative about
+what has been seen; that is what makes a re-run of an unchanged extract free, and it is also what makes
+a half-cleared database look broken in a confusing way. Delete the matching `source_version` rows, or
+use a fresh database.
+
+Do not start reading `contract_action.contract_award_key`. It is stored to be measured —
+`contract_award_key_agreement` compares it against decision D13's grouping — and changing how contracts
+are grouped would move the forecast, the lineages and every campaign figure at once. See D29.
+
 ## Working on screening
 
 `src/loaders/govcon/screening.ts` answers "is this company debarred" and "what is its UEI". It is the

@@ -24,12 +24,17 @@ import type { PoolClient } from 'pg';
 import {
   startRun,
   finishRun,
-  recordVersion,
   summarize,
   type RunHandle,
 } from '../lib/provenance.js';
 import { optional, optionalInteger, optionalNumber } from '../lib/normalize.js';
-import { EntityResolver, enqueueVendorForReview } from '../resolve/entity-resolver.js';
+import { EntityResolver } from '../resolve/entity-resolver.js';
+import {
+  writeContractAction,
+  sourceRecordIdFor,
+  LabelTally,
+  type NormalizedTransaction,
+} from './contract.js';
 import {
   buildColumnMap,
   describeColumnMap,
@@ -231,28 +236,9 @@ export async function loadFpdsFile(
 
   const run = await startRun(client, SOURCE_SYSTEM, fileName);
 
-  // Label tally, flushed after the file. Keyed by code type, code, and label text.
-  const labelTally = new Map<
-    string,
-    {
-      codeType: 'naics' | 'psc' | 'agency' | 'office';
-      codeValue: string;
-      label: string;
-      count: number;
-    }
-  >();
-
-  const tallyLabel = (
-    codeType: 'naics' | 'psc' | 'agency' | 'office',
-    codeValue: string | null,
-    label: string | null,
-  ): void => {
-    if (!codeValue || !label) return;
-    const key = `${codeType}\0${codeValue}\0${label}`;
-    const existing = labelTally.get(key);
-    if (existing) existing.count += 1;
-    else labelTally.set(key, { codeType, codeValue, label, count: 1 });
-  };
+  // Label tally, flushed after the file. Shared with the GovCon contracts loader so a code arriving
+  // from either source teaches the same table the same way.
+  const labelTally = new LabelTally();
 
   for await (const row of parser as AsyncIterable<Record<string, string>>) {
     rowNumber += 1;
@@ -341,31 +327,63 @@ export async function loadFpdsFile(
       surrogateKeysIssued += 1;
     }
 
-    const sourceRecordId = [awardingAgency, piid, modificationNumber, transactionNumber].join('|');
+    const transaction: NormalizedTransaction = {
+      awardingAgencyCode: awardingAgency,
+      piid,
+      modificationNumber,
+      transactionNumber,
+      idvPiid: payload.idv_piid,
+      idvAgencyCode: payload.idv_agency_code,
+      awardType: payload.award_type,
+      signedDate: payload.signed_date,
+      effectiveDate: payload.effective_date,
+      currentCompletionDate: payload.current_completion_date,
+      ultimateCompletionDate: payload.ultimate_completion_date,
+      actionObligation: payload.action_obligation,
+      baseAndAllOptions: payload.base_and_all_options,
+      contractingDepartmentCode: payload.contracting_department_code,
+      contractingAgencyCode: payload.contracting_agency_code,
+      contractingOfficeCode: payload.contracting_office_code,
+      fundingAgencyCode: payload.funding_agency_code,
+      fundingOfficeCode: payload.funding_office_code,
+      placeOfPerformanceState: payload.place_of_performance_state,
+      extentCompeted: payload.extent_competed,
+      setAsideType: payload.set_aside_type,
+      numberOfOffersReceived: payload.number_of_offers_received,
+      vendorNameRaw: vendorName,
+      vendorUei,
+      vendorCage,
+      naicsCode,
+      pscCode,
+      // A bulk extract does not carry the API's globally-unique award key. Left null rather than
+      // derived, and the upsert never overwrites an existing key with a blank.
+      awardKey: null,
+    };
+
+    const sourceRecordId = sourceRecordIdFor(transaction);
 
     // A key already seen in this file with a different payload is a transaction the
     // upsert below is about to overwrite. Counted, never hidden. Migration 0015's
     // views report the same thing corpus wide, from the archive.
     const priorHashForKey = seenKeyHash.get(sourceRecordId);
 
-    const version = await recordVersion(client, run, sourceRecordId, payload);
+    // The archive, the hash skip, the resolution and the upsert all live in
+    // src/loaders/contract.ts, shared with the GovCon contracts loader so that a transaction
+    // arriving from both converges on one row. The hash skip is what makes a re-run of an
+    // unchanged 48,645 row file do no write work beyond the hash lookups.
+    const written = await writeContractAction(client, run, transaction, payload, resolver);
 
-    if (priorHashForKey !== undefined && priorHashForKey !== version.payloadHash) {
+    if (priorHashForKey !== undefined && priorHashForKey !== written.payloadHash) {
       collapsedTransactions += 1;
       collapsedObligation += payload.action_obligation ?? 0;
     }
-    seenKeyHash.set(sourceRecordId, version.payloadHash);
+    seenKeyHash.set(sourceRecordId, written.payloadHash);
 
-    // The hash skip lives here, where it matters. A re-run of an unchanged 48,645
-    // row file does no write work at all beyond the hash lookups.
-    if (!version.changed) continue;
+    if (!written.changed) continue;
 
-    const resolution = resolver.resolve({
-      vendorName,
-      uei: vendorUei,
-      cage: vendorCage,
-    });
+    const resolution = written.resolution!;
     resolvedByMethod[resolution.method] = (resolvedByMethod[resolution.method] ?? 0) + 1;
+    classificationsWritten += written.classificationsWritten;
 
     if (resolution.entityId === null) {
       unresolvedRows += 1;
@@ -378,76 +396,6 @@ export async function loadFpdsFile(
         );
         if (resolver.namesKnownEntity(vendorParentName)) unresolvedButParentNamed += 1;
       }
-      await enqueueVendorForReview(client, SOURCE_SYSTEM, { vendorName, uei: vendorUei, cage: vendorCage }, resolution);
-    }
-
-    const { rows: actionRows } = await client.query<{ contract_action_id: string }>(
-      `insert into contract_action (
-         awarding_agency_code, piid, modification_number, transaction_number,
-         idv_piid, idv_agency_code, award_type,
-         signed_date, effective_date, current_completion_date, ultimate_completion_date,
-         action_obligation, base_and_all_options,
-         contracting_department_code, contracting_agency_code, contracting_office_code,
-         funding_agency_code, funding_office_code, place_of_performance_state,
-         extent_competed, set_aside_type, number_of_offers_received,
-         vendor_name_raw, entity_id, entity_match_method, entity_match_confidence,
-         source_version_id
-       ) values (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
-       )
-       on conflict (awarding_agency_code, piid, modification_number, transaction_number) do update set
-         idv_piid = excluded.idv_piid,
-         idv_agency_code = excluded.idv_agency_code,
-         award_type = excluded.award_type,
-         signed_date = excluded.signed_date,
-         effective_date = excluded.effective_date,
-         current_completion_date = excluded.current_completion_date,
-         ultimate_completion_date = excluded.ultimate_completion_date,
-         action_obligation = excluded.action_obligation,
-         base_and_all_options = excluded.base_and_all_options,
-         contracting_department_code = excluded.contracting_department_code,
-         contracting_agency_code = excluded.contracting_agency_code,
-         contracting_office_code = excluded.contracting_office_code,
-         funding_agency_code = excluded.funding_agency_code,
-         funding_office_code = excluded.funding_office_code,
-         place_of_performance_state = excluded.place_of_performance_state,
-         extent_competed = excluded.extent_competed,
-         set_aside_type = excluded.set_aside_type,
-         number_of_offers_received = excluded.number_of_offers_received,
-         vendor_name_raw = excluded.vendor_name_raw,
-         entity_id = excluded.entity_id,
-         entity_match_method = excluded.entity_match_method,
-         entity_match_confidence = excluded.entity_match_confidence,
-         source_version_id = excluded.source_version_id
-       returning contract_action_id`,
-      [
-        awardingAgency, piid, modificationNumber, transactionNumber,
-        payload.idv_piid, payload.idv_agency_code, payload.award_type,
-        payload.signed_date, payload.effective_date, payload.current_completion_date, payload.ultimate_completion_date,
-        payload.action_obligation, payload.base_and_all_options,
-        payload.contracting_department_code, payload.contracting_agency_code, payload.contracting_office_code,
-        payload.funding_agency_code, payload.funding_office_code, payload.place_of_performance_state,
-        payload.extent_competed, payload.set_aside_type, payload.number_of_offers_received,
-        vendorName, resolution.entityId, resolution.method, resolution.confidence,
-        version.sourceVersionId,
-      ],
-    );
-    const contractActionId = Number(actionRows[0]!.contract_action_id);
-
-    // NAICS and PSC go to their own table. Spec 7.2 forbids a text column here,
-    // which was Codex defect 5.
-    for (const [codeType, codeValue] of [
-      ['naics', naicsCode],
-      ['psc', pscCode],
-    ] as Array<['naics' | 'psc', string | null]>) {
-      if (!codeValue) continue;
-      const { rowCount } = await client.query(
-        `insert into contract_action_classification (contract_action_id, code_type, code_value, is_principal)
-         values ($1, $2, $3, true)
-         on conflict (contract_action_id, code_type, code_value) do nothing`,
-        [contractActionId, codeType, codeValue],
-      );
-      classificationsWritten += rowCount ?? 0;
     }
 
     // Labels are tallied in memory and flushed once after the file, so
@@ -466,7 +414,7 @@ export async function loadFpdsFile(
       if (labelType === 'naics') label = cell(row, columnMap, 'naics_description') ?? label;
       if (labelType === 'psc') label = cell(row, columnMap, 'psc_description') ?? label;
 
-      tallyLabel(labelType, split.code, label);
+      labelTally.observe(labelType, split.code, label);
     }
 
     if (options.progressEvery && rowNumber % options.progressEvery === 0) {
@@ -475,16 +423,7 @@ export async function loadFpdsFile(
   }
 
   // Flush the label tally. One round trip per distinct label, not per row.
-  for (const entry of labelTally.values()) {
-    await client.query('select cie_observe_code_label($1, $2, $3, $4, $5)', [
-      entry.codeType,
-      entry.codeValue,
-      entry.label,
-      SOURCE_SYSTEM,
-      entry.count,
-    ]);
-    labelsWritten += 1;
-  }
+  labelsWritten = await labelTally.flush(client, SOURCE_SYSTEM);
 
   await finishRun(client, run);
   console.log(summarize(run, fileName.slice(0, 27)));

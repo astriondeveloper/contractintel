@@ -172,6 +172,17 @@ jobs:
           npm run load:govcon -- --unfiltered
           npm run load:govcon -- --backfill --from 2026-01-01
 
+          # Contract actions. The stub serves three transactions on one PIID plus a rollup the loader
+          # must refuse: writing that rollup would put a whole contract's obligation on a single row
+          # and every downstream total would be wrong without anything failing.
+          npm run load:contracts -- --dry-run --from 2024-11-01 --sample
+          npm run load:contracts -- --from 2024-11-01
+          npm run load:contracts -- --cursor
+          # Again, to prove the hash skip: the second run must write nothing.
+          npm run load:contracts -- --from 2024-11-01
+          # And the ungated company path, which must not move the search cursor.
+          npm run load:contracts -- --uei ZGCONUEI0001
+
           # The same notice through the direct SAM.gov loader must not produce a second pursuit.
           npm run load:sam
 

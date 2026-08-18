@@ -89,6 +89,66 @@ async function corpusSection(client: PoolClient): Promise<Section> {
       : (new Date(row.last_signed).getTime() - new Date(row.first_signed).getTime()) /
         (365.25 * 86_400_000);
 
+  // Which source supplied which part of the corpus.
+  //
+  // The two sources are not interchangeable and the difference is invisible in the totals above. A
+  // bulk FPDS extract carries fifteen years; GovCon API covers October 2024 onward comprehensively and
+  // is sparse before it. So a corpus that is entirely API-sourced looks populated and cannot teach an
+  // office's recompete rhythm, and this is the reading that says so before somebody trusts a forecast
+  // built on it.
+  // A left join, so rows with no provenance are shown rather than dropped. A breakdown whose parts do
+  // not add up to the total is worse than no breakdown: it invites the reader to conclude the corpus
+  // is smaller or shallower than it is. Rows without a source_version are seeds and fixtures, which
+  // no loader wrote.
+  const { rows: sources } = await client.query<{
+    source_system: string | null;
+    actions: string;
+    first_signed: Date | null;
+    last_signed: Date | null;
+  }>(
+    `select v.source_system,
+            count(*)::text        as actions,
+            min(a.signed_date)    as first_signed,
+            max(a.signed_date)    as last_signed
+       from contract_action a
+       left join source_version v on v.source_version_id = a.source_version_id
+      where a.signed_date is not null
+      group by v.source_system
+      order by v.source_system nulls last`,
+  );
+
+  const spanOf = (from: Date | null, to: Date | null): number =>
+    from === null || to === null
+      ? 0
+      : (new Date(to).getTime() - new Date(from).getTime()) / (365.25 * 86_400_000);
+
+  // Whether *anything* supplies depth. This is the question the per-source rows are evidence for, and
+  // it must not be answered by counting sources: one deep extract is enough, and three shallow API
+  // pulls are not.
+  const deepestSpan = Math.max(0, ...sources.map((s) => spanOf(s.first_signed, s.last_signed)));
+  const apiIsTheOnlyDepth = sources.length > 0 && deepestSpan < 15;
+
+  const bySource: Reading[] = sources.map((source) => {
+    const span = spanOf(source.first_signed, source.last_signed);
+    const system = source.source_system;
+    return {
+      label: `  from ${system ?? 'seeds, no loader'}`,
+      value: `${count(source.actions)} actions, ${span.toFixed(1)} years`,
+      meaning:
+        system === null
+          ? 'Written directly rather than by a loader, so these carry no provenance. Expected for ' +
+            'seeds and demo data; unexpected for anything else.'
+          : system === 'govcon_contract'
+            ? 'Recency and breadth. Comprehensive from October 2024 only, so it cannot supply the ' +
+              'depth a cadence needs however many actions it carries.'
+            : span >= 15
+              ? 'Deep enough for a five-year rhythm to appear three times in one office.'
+              : 'The depth a cadence learns from comes from here. More of it is what moves the ' +
+                'forecast off the default lead time.',
+      concern: system === 'govcon_contract' && apiIsTheOnlyDepth,
+    };
+  });
+
   return {
     title: 'The corpus',
     readings: [
@@ -111,6 +171,7 @@ async function corpusSection(client: PoolClient): Promise<Section> {
             : 'Long enough for a five-year rhythm to appear three times in one office.',
         concern: years > 0 && years < 15,
       },
+      ...bySource,
       {
         label: 'Unresolved to an entity',
         value: count(row.unresolved),

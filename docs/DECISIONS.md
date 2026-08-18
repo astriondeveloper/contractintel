@@ -892,6 +892,79 @@ quietly — on a hand-off, with somebody's name on it.
 
 ---
 
+## D29. The API supplies recency and breadth; the corpus keeps supplying history
+
+GovCon API serves FPDS transactions, which is what the bulk extract serves, so the obvious move was to
+treat it as a replacement and stop depending on a DACIS extract that cannot be committed to a public
+repository. That would have been wrong, and the reason is arithmetic rather than preference.
+
+**Decision: the API owns award recency and breadth. The corpus keeps owning depth. Both write through
+one path.**
+
+Coverage is comprehensive from October 2024 onward and a sparse backfill before it. Two things in this
+system need real depth:
+
+`office_recompete_cadence` learns an office's rhythm from follow-on chains, and a chain needs a
+contract that *ended* plus a successor starting within [end − 180d, end + 365d]. `MIN_CADENCE_CHAINS`
+is 3 and `MIN_USABLE_CADENCE_DAYS` is 365. Three separate lineages each turning over on an interval of
+a year or more cannot be observed inside a window that only opens in late 2024. So an API-only corpus
+learns approximately no cadence and every projection falls back to the 365-day default — the forecast
+still renders, and it has quietly stopped being evidence-based.
+
+`forecast_backtest` scores a projection made as of a past date against what happened next. With no
+history before the as-of date there is nothing to project from, so the number that says whether to
+believe the forecast cannot be computed at all.
+
+Both failures are silent, which is what makes this a decision worth writing down rather than a note.
+The mitigation is a reading, not a guard: `npm run readiness` breaks the corpus down by source system
+and by the years each one spans, so three thousand API-sourced actions cannot pass for fifteen years of
+history. The per-source rows use a left join and include rows with no provenance, because a breakdown
+whose parts do not add up to the total invites the reader to conclude the corpus is shallower than it
+is.
+
+`companies/{uei}/awards` is the exception and is Pro-tier: it is ungated by the plan window and returns
+a company's full history. That is real depth, per company rather than per office — enough to complete
+Astrion's own incumbency and a named competitor set, not enough to learn how a contracting office
+behaves. `--uei` deliberately does not move the search cursor, because a company pull covers that
+company's history rather than a window ending now.
+
+Rejected: dropping the extract. Rejected too: a separate table for API-sourced actions. Both loaders
+share `writeContractAction`, so convergence is structural — and that shared path is also what gives an
+API-sourced transaction the same entity resolution, classifications and code labels a CSV-sourced one
+gets, rather than quietly less.
+
+### The rollup, which is the one mapping error that would corrupt the corpus
+
+`/contracts/{piid}` returns the latest transaction plus a `transaction_rollup` summing every action on
+that PIID. Writing that record into `contract_action` would create one row carrying a whole contract's
+obligation as though it were a single action. `cie_award_shape_asof` would report the wrong shape,
+campaign sizing would double-count against the transactions, and nothing would error.
+
+`isRollup` refuses on the *presence of a marker* rather than on a judgement about whether the numbers
+look like a rollup. That asymmetry is deliberate: a false refusal costs one transaction and appears in
+`skippedRollup`, while a false accept is invisible. The count is deduplicated by award key, because a
+contract carrying two of the profile's codes comes back from both searches and reporting eleven rollups
+where there was one reads as a data problem rather than as arithmetic.
+
+### The globally-unique award key, stored and not acted on
+
+GovCon API supplies `contract_award_unique_key`, globally unique, which would resolve exactly the
+ambiguity decision D13 works around by grouping on the vehicle as well as the PIID.
+
+It is stored and nothing reads it. Changing how contracts are grouped would move the forecast, the
+recompete lineages and every campaign figure simultaneously, on the strength of a field this system had
+never seen a value of. `contract_award_key_agreement` measures the two ways the key and the composite
+can disagree — one key spanning several groups means D13 is too strict, one group holding several keys
+means it is too loose — and when there is enough keyed data the measurement decides.
+
+Writing that view immediately earned its keep: it showed the stub fixture had modelled the key at
+transaction granularity, when the real field identifies the *award* and is shared across every
+modification. The fixture was wrong, the view caught it, and the corrected expectation is now asserted
+in a test. Any behaviour built on an unmeasured assumption about that field would have inherited the
+same error without a symptom.
+
+---
+
 ---
 
 ## Open questions
