@@ -14,7 +14,7 @@
  */
 import { html } from '../html.js';
 import { screen, type Ctx } from '../shell.js';
-import { card, cards, chip, feed as feedList, tiles, type FeedItem } from '../components.js';
+import { card, cards, chip, feed as feedList, liveStatus, tiles, type FeedItem } from '../components.js';
 import { ABSENT, count, day, moment, since, truncate, usd, usdCompact } from '../format.js';
 import {
   backtests,
@@ -23,6 +23,7 @@ import {
   followsFor,
   forecastQuarters,
   forecastState,
+  feedFreshness,
   freshness,
   handoffMetric,
   recentActivity,
@@ -50,7 +51,7 @@ export async function dashboard(ctx: Ctx): Promise<string> {
   const principal = ctx.user?.principalName ?? '';
   const mark = await watermarkFor(principal);
 
-  const [counts, follows, newest, tracked, quarters, state, runs, metric, activity, sources, summary] =
+  const [counts, follows, newest, tracked, quarters, state, runs, metric, activity, sources, summary, live] =
     await Promise.all([
       feedCounts(principal, mark.seen_through),
       principal === '' ? Promise.resolve([]) : followsFor(principal, mark.seen_through),
@@ -63,6 +64,7 @@ export async function dashboard(ctx: Ctx): Promise<string> {
       recentActivity(12),
       freshness(),
       requirementSummary(),
+      feedFreshness(),
     ]);
 
   const nextQuarters = quarters.slice(0, 6);
@@ -235,6 +237,7 @@ export async function dashboard(ctx: Ctx): Promise<string> {
   });
 
   const body = html`
+    ${liveStatus(live, since)}
     ${ctx.user !== null && counts.follows === 0
       ? html`<div class="notice info">
           <h3>Two minutes of setup and this becomes yours</h3>

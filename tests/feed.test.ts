@@ -299,6 +299,82 @@ describe('follows', () => {
 
 /* ====================================================================== feed */
 
+describe('a feed nobody has configured yet', () => {
+  /**
+   * Day one, for all twenty-odd people. Nobody has follows yet.
+   *
+   * The design is deliberate and asserted below: `everything` is the fallback that keeps the screen
+   * useful, and `patch` stays empty. What these add is the agreement between the two — "new" is a
+   * patch-scoped word in the tabs and the counts, so a row outside your patch must not be badged New.
+   * It used to be, which put every row on the Everything tab under a New badge beside a tab reading
+   * New (0): the same word meaning two things eight pixels apart.
+   */
+  it('does not badge a row new when it is not in your patch', async () => {
+    await requirement({ key: 'N1' });
+
+    const everything = await feedFor(ALICE, 'everything');
+    expect(everything.rows.length).toBeGreaterThan(0);
+    for (const row of everything.rows) expect(row.is_new).toBe(false);
+  });
+
+  it('agrees with its own count: rows badged new equal the new count', async () => {
+    await requirement({ key: 'N2' });
+    await requirement({ key: 'N3' });
+
+    const everything = await feedFor(ALICE, 'everything');
+    const counts = await feedCounts(ALICE.principalName, (await watermarkFor(ALICE.principalName)).seen_through);
+
+    expect(everything.rows.filter((r) => r.is_new).length).toBe(counts.new_since);
+  });
+
+  it('badges a row new once a follow brings it into the patch', async () => {
+    await performFollowAction('follow', form({ follow_type: 'agency', target: '9700' }), ALICE);
+    await requirement({ key: 'N4', agency: '9700' });
+
+    const everything = await feedFor(ALICE, 'everything');
+    const mine = everything.rows.filter((r) => r.follow_count > 0);
+    expect(mine.length).toBeGreaterThan(0);
+    for (const row of mine) expect(row.is_new).toBe(true);
+  });
+
+  it('still badges nothing new outside the patch once a follow exists', async () => {
+    await performFollowAction('follow', form({ follow_type: 'agency', target: '9700' }), ALICE);
+    await requirement({ key: 'N5', agency: '9700' });
+    await requirement({ key: 'N6', agency: '5700' });
+
+    const everything = await feedFor(ALICE, 'everything');
+    const others = everything.rows.filter((r) => r.follow_count === 0);
+    expect(others.length).toBeGreaterThan(0);
+    for (const row of others) expect(row.is_new).toBe(false);
+  });
+
+  it('scopes the badge per person', async () => {
+    await performFollowAction('follow', form({ follow_type: 'agency', target: '9700' }), ALICE);
+    await requirement({ key: 'N7', agency: '9700' });
+
+    const forAlice = await feedFor(ALICE, 'everything');
+    const forBob = await feedFor(BOB, 'everything');
+
+    expect(forAlice.rows.some((r) => r.is_new)).toBe(true);
+    // Bob follows nothing, so nothing is new to Bob even though it is new to Alice.
+    expect(forBob.rows.some((r) => r.is_new)).toBe(false);
+  });
+
+  it('leaves a follow that matches nothing visibly empty', async () => {
+    // The case a day-one fallback must not swallow. "No follows" and "follows that match nothing" are
+    // different questions: a dead follow is a typo or a code nobody buys under, and showing the whole
+    // government in its place would hide it behind a full screen.
+    await requirement({ key: 'N8', agency: '9700' });
+    await performFollowAction('follow', form({ follow_type: 'agency', target: 'ZZZZ' }), ALICE);
+
+    const counts = await feedCounts(ALICE.principalName, (await watermarkFor(ALICE.principalName)).seen_through);
+    expect(counts.follows).toBe(1);
+    expect(counts.in_patch).toBe(0);
+    expect(counts.everything).toBeGreaterThan(0);
+    expect((await feedFor(ALICE, 'patch')).rows).toHaveLength(0);
+  });
+});
+
 describe('the feed', () => {
   it('marks something new when it landed after the read mark', async () => {
     await performFollowAction('follow', form({ follow_type: 'agency', target: '9700' }), ALICE);

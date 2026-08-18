@@ -97,15 +97,19 @@ export function since(value: Date | string | null | undefined): string {
   if (Number.isNaN(date.getTime())) return ABSENT;
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
   if (seconds < 90) return 'just now';
+  // Singular where the number is one. The bands overlap deliberately — 90 minutes rather than 60,
+  // 36 hours rather than 24 — so the unit changes once the smaller one has stopped being readable,
+  // and that overlap is what makes "1 hour ago" and "1 day ago" reachable at all.
+  const plural = (n: number, unit: string): string => `${n} ${unit}${n === 1 ? '' : 's'} ago`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 90) return `${minutes} minutes ago`;
+  if (minutes < 90) return plural(minutes, 'minute');
   const hours = Math.floor(minutes / 60);
-  if (hours < 36) return `${hours} hours ago`;
+  if (hours < 36) return plural(hours, 'hour');
   const days = Math.floor(hours / 24);
-  if (days < 60) return `${days} days ago`;
+  if (days < 60) return plural(days, 'day');
   const months = Math.floor(days / 30);
-  if (months < 24) return `${months} months ago`;
-  return `${Math.floor(days / 365)} years ago`;
+  if (months < 24) return plural(months, 'month');
+  return plural(Math.floor(days / 365), 'year');
 }
 
 /** A percentage to one decimal. Absent when the denominator is zero. */

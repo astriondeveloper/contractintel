@@ -93,6 +93,80 @@ export function emptyBecauseNoData(what: string, command: string): Html {
     <code>${command}</code>, or see <code>CONTRIBUTING.md</code>.`;
 }
 
+/* --------------------------------------------------------------- live status */
+
+/**
+ * How live the opportunities on this screen are, in one line.
+ *
+ * Added because the interface could not previously distinguish three situations that look identical
+ * from a chair: nothing matched, no sync has ever run, and the key is missing so no sync can run. All
+ * three render as a feed that never changes. For a tool whose premise is seeing a requirement before
+ * anybody else, "how old is this" is the first thing somebody should be able to read — and if the
+ * answer is bad, the line says which of the three it is and names the command that fixes it.
+ *
+ * Four states, each with a different action:
+ *
+ *   never run   No notice loader has ever finished. Nothing is wrong with the code; nothing has run.
+ *   stale       It ran, but not lately, so the schedule is broken rather than the key.
+ *   gap         It ran and reported a clamp, so a window was fetched by nobody.
+ *   live        With how long ago, because "live" without a number is a claim rather than a fact.
+ */
+export interface LiveStatus {
+  readonly last_success_at: Date | null;
+  readonly age_seconds: number | null;
+  readonly never_run: boolean;
+  readonly landed_today: number;
+  readonly cursor_clamped: boolean;
+  readonly sources: readonly { source_system: string; age_seconds: number | null; notices: number }[];
+}
+
+/** Anything older than this is not an early-warning feed any more. */
+const STALE_AFTER_SECONDS = 26 * 3600;
+
+export function liveStatus(status: LiveStatus, ago: (at: Date) => string): Html {
+  if (status.never_run) {
+    return html`<div class="live none">
+      <span class="dot"></span>
+      <span><strong>No opportunity sync has run yet</strong>, so nothing on this screen came from a
+        live feed. Check the key with <code>npm run load:govcon -- --probe</code>, then pull with
+        <code>npm run load:govcon</code>. Until then the only requirements here are whatever
+        <code>npm run signals</code> found in the loaded corpus.</span>
+    </div>`;
+  }
+
+  const age = status.age_seconds ?? Infinity;
+  const stamp = status.last_success_at === null ? 'an unrecorded time' : ago(status.last_success_at);
+
+  if (age > STALE_AFTER_SECONDS) {
+    return html`<div class="live stale">
+      <span class="dot"></span>
+      <span><strong>Opportunities last arrived ${stamp}.</strong> The sync is meant to run hourly, so
+        this is the schedule rather than the key — the hourly job is not running. See the scheduled
+        jobs table in <code>docs/DEPLOY.md</code>, or pull now with
+        <code>npm run load:govcon</code>.</span>
+    </div>`;
+  }
+
+  if (status.cursor_clamped) {
+    return html`<div class="live stale">
+      <span class="dot"></span>
+      <span><strong>Live as of ${stamp}, but the last sync had a gap.</strong> It asked for a window
+        wider than the delta endpoint serves, so an interval was fetched by nobody. Fill it with
+        <code>npm run load:govcon -- --backfill --from &lt;yyyy-mm-dd&gt;</code>.</span>
+    </div>`;
+  }
+
+  const arrivals =
+    status.landed_today === 0
+      ? 'nothing new in the last day, which is an ordinary day'
+      : `${status.landed_today} arrived in the last day`;
+
+  return html`<div class="live ok">
+    <span class="dot"></span>
+    <span>Live. Opportunities last arrived ${stamp}, ${arrivals}.</span>
+  </div>`;
+}
+
 /* ------------------------------------------------------------------- chips */
 
 export function chip(kind: 'pass' | 'fail' | 'blocked' | 'neutral' | 'sky', label: string): Html {

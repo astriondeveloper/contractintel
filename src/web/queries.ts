@@ -1033,7 +1033,19 @@ const FEED_SOURCE = `
          i.first_seen_at, i.band, i.strategic_fit::text,
          coalesce(m.follow_count, 0)                as follow_count,
          coalesce(m.matched_by, 'not in your patch') as matched_by,
-         (i.first_seen_at > $2::timestamptz)         as is_new,
+         -- New *to you*, which requires it to be in your patch at all.
+         --
+         -- The follow test is not decoration. "New" is a patch-scoped idea everywhere else on this
+         -- screen: the New tab, its count, and the "new since you looked" figure all require a follow
+         -- match, because somebody with no follows has no patch for anything to be new in. Without the
+         -- test here, the Everything tab badged every row New while the tab beside it read New (0) —
+         -- the same word meaning two things eight pixels apart.
+         --
+         -- The fix is this direction rather than relaxing the tabs, because the empty-patch case is a
+         -- deliberate design decision with its own test: the everything view is the fallback that
+         -- keeps a day-one screen useful, and the patch view staying empty is what makes a follow
+         -- matching nothing visible as a dead follow rather than hidden behind a full screen.
+         (i.first_seen_at > $2::timestamptz and m.pursuit_id is not null) as is_new,
          coalesce(mine.tracked, false)               as tracked,
          coalesce(mine.dismissed, false)             as dismissed,
          coalesce(mine.sent, false)                  as sent,
@@ -2165,4 +2177,101 @@ export async function qualityCounts(): Promise<QualityCounts> {
             (select count(*)::text from contract_action where entity_id is null) as unresolved_actions`,
   );
   return row!;
+}
+
+/* ========================================================== how live the feed is */
+
+/**
+ * How live the opportunities on screen are.
+ *
+ * This exists because the interface could not previously tell three situations apart, and they look
+ * identical from a chair: nothing matched your follows, no sync has ever run, and the API key is
+ * missing so no sync can run. All three render as an empty or unchanging feed. For a tool whose entire
+ * premise is seeing a requirement before anybody else, "how old is this" is not a diagnostic detail —
+ * it is the first thing a person should be able to read, and the thing that decides whether they trust
+ * the screen at all.
+ *
+ * Notice sources only. Contract and seed loaders are corpus depth rather than the live feed, and mixing
+ * them in would let a fresh FPDS load make a dead notice sync look healthy.
+ */
+export const NOTICE_SOURCES = ['govcon_opportunity', 'sam_opportunity'] as const;
+
+export interface NoticeSourceRow {
+  readonly source_system: string;
+  readonly last_success_at: Date | null;
+  readonly age_seconds: number | null;
+  readonly runs: number;
+  readonly notices: number;
+}
+
+export interface FeedFreshness {
+  readonly sources: readonly NoticeSourceRow[];
+  /** The most recent successful notice run across every source, which is what "live" means. */
+  readonly last_success_at: Date | null;
+  readonly age_seconds: number | null;
+  /** True when no notice loader has ever completed. Different from stale, and fixed differently. */
+  readonly never_run: boolean;
+  /** Requirements that arrived in the last day, whichever source brought them. */
+  readonly landed_today: number;
+  /** Where the incremental cursor got to, and whether its last run left a gap. */
+  readonly cursor_at: Date | null;
+  readonly cursor_clamped: boolean;
+}
+
+export async function feedFreshness(): Promise<FeedFreshness> {
+  const sources = await query<NoticeSourceRow & { age_seconds: string | null; runs: string; notices: string }>(
+    `select r.source_system,
+            max(r.finished_at) filter (where r.status = 'succeeded')          as last_success_at,
+            extract(epoch from now() - max(r.finished_at)
+              filter (where r.status = 'succeeded'))::text                    as age_seconds,
+            count(*) filter (where r.status = 'succeeded')::text               as runs,
+            (select count(*)::text from pursuit p
+              where p.generated_by = r.source_system)                         as notices
+       from source_run r
+      where r.source_system = any($1::text[])
+      group by r.source_system
+      order by r.source_system`,
+    [[...NOTICE_SOURCES]],
+  );
+
+  const [extra] = await query<{
+    landed_today: string;
+    cursor_at: Date | null;
+    cursor_clamped: boolean | null;
+  }>(
+    `select
+       (select count(*)::text from pursuit
+         where generated_by = any($1::text[]) and created_at > now() - interval '1 day') as landed_today,
+       (select cursor_at from sync_cursor
+         where source_system = 'govcon_opportunity' order by cursor_at desc limit 1)     as cursor_at,
+       (select last_clamped from sync_cursor
+         where source_system = 'govcon_opportunity' order by cursor_at desc limit 1)     as cursor_clamped`,
+    [[...NOTICE_SOURCES]],
+  );
+
+  const typed: NoticeSourceRow[] = sources.map((row) => ({
+    source_system: row.source_system,
+    last_success_at: row.last_success_at,
+    age_seconds: row.age_seconds === null ? null : Number(row.age_seconds),
+    runs: Number(row.runs),
+    notices: Number(row.notices),
+  }));
+
+  const withSuccess = typed.filter((row) => row.last_success_at !== null);
+  // The freshest source wins. One dead source alongside one live one is not a stale feed — it is a
+  // live feed with a dead fallback, which is a different message and a different fix.
+  const newest = withSuccess.reduce<NoticeSourceRow | null>(
+    (best, row) => (best === null || (row.age_seconds ?? Infinity) < (best.age_seconds ?? Infinity) ? row : best),
+    null,
+  );
+
+  return {
+    sources: typed,
+    last_success_at: newest?.last_success_at ?? null,
+    age_seconds: newest?.age_seconds ?? null,
+    never_run: withSuccess.length === 0,
+    landed_today: Number(extra?.landed_today ?? '0'),
+    cursor_at: extra?.cursor_at ?? null,
+    cursor_clamped: extra?.cursor_clamped === true,
+  };
 }

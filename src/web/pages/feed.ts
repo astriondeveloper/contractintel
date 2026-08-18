@@ -23,10 +23,17 @@
  */
 import { html, type Html } from '../html.js';
 import { screen, type Ctx } from '../shell.js';
-import { chip, pager, searchForm, tiles } from '../components.js';
+import { chip, liveStatus, pager, searchForm, tiles } from '../components.js';
 import { count, day, moment, since, truncate, usd, usdCompact } from '../format.js';
 import { PAGE_SIZE, baseQuery, offset, pageNumber, text } from '../params.js';
-import { feed as feedRows, feedCounts, watermarkFor, type FeedRow, type FeedView } from '../queries.js';
+import {
+  feed as feedRows,
+  feedCounts,
+  feedFreshness,
+  watermarkFor,
+  type FeedRow,
+  type FeedView,
+} from '../queries.js';
 
 const VIEWS: readonly FeedView[] = ['new', 'patch', 'tracked', 'sent', 'dismissed', 'everything'];
 const SORTS = ['newest', 'due', 'fit', 'value'] as const;
@@ -144,6 +151,9 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
 
   const mark = await watermarkFor(principal);
   const counts = await feedCounts(principal, mark.seen_through);
+  // Above the tiles, because "is this live" comes before any number computed from it. A stale feed
+  // with confident-looking counts is the failure mode this line exists to prevent.
+  const live = await feedFreshness();
 
   // Somebody with no follows has an empty patch, so landing them on an empty "new" screen would
   // be the first and last thing they saw. They get the whole market instead, labelled as such,
@@ -242,9 +252,13 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
     if (counts.everything === 0) {
       return html`<div class="empty">
         <strong>No requirements are loaded, which is the expected state of a fresh clone.</strong><br>
-        They arrive from <code>npm run load:sam</code>, which searches SAM.gov for the codes on the
-        opportunity profile, and <code>npm run signals</code>, which finds contracts ending inside
-        the recompete window. <code>CONTRIBUTING.md</code> has the sequence.
+        Three things fill this screen. <code>npm run profile</code> builds the codes to search for,
+        then <code>npm run load:govcon</code> pulls open notices from GovCon API, and
+        <code>npm run signals</code> finds contracts in the loaded corpus that end inside the
+        recompete window. Check the key first with
+        <code>npm run load:govcon -- --probe</code>; it spends one request and says whether the
+        problem is the key, the plan or the network.
+        <code>CONTRIBUTING.md</code> has the sequence.
       </div>`;
     }
     if (ctx.user === null) {
@@ -291,6 +305,7 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
   };
 
   const body = html`
+    ${liveStatus(live, since)}
     ${headline}
     ${counts.follows === 0 && ctx.user !== null
       ? html`<div class="notice info">

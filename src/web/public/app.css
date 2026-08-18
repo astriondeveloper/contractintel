@@ -705,6 +705,66 @@ td .sub {
   background: rgba(41, 170, 225, 0.08);
 }
 
+/* --------------------------------------------------------------- live status */
+
+/* One line saying how live the feed is. Font size 13px: above the 12px floor acceptance test 11
+   enforces, and every length in px because that test also rejects relative units. */
+.live {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--deep-space);
+  padding: 9px 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--platinum);
+}
+
+/* The dot carries the state for someone scanning, and the sentence carries it for everyone else.
+   Colour is never the only signal: each state's text says what it is in words. */
+.live .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 8px;
+  margin-top: 5px;
+  flex: 0 0 auto;
+}
+
+.live.ok {
+  border-left: 3px solid var(--astrion-sky);
+}
+
+.live.ok .dot {
+  background: var(--astrion-sky);
+}
+
+.live.stale {
+  border-left: 3px solid var(--supernova);
+}
+
+.live.stale .dot {
+  background: var(--supernova);
+}
+
+.live.none {
+  border-left: 3px solid var(--twilight-te);
+}
+
+.live.none .dot {
+  background: var(--twilight-te);
+}
+
+.live code {
+  background: var(--astrion-black);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+
 /* ------------------------------------------------------------------- notice */
 
 .notice {
