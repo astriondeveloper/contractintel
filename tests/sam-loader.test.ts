@@ -15,6 +15,7 @@ import type { PoolClient } from 'pg';
 import { pool, closePool } from '../src/db/index.js';
 import {
   loadSamOpportunities,
+  probeSam,
   classify,
   DEFAULT_NOTICE_TYPES,
   SOURCE_SYSTEM,
@@ -377,5 +378,67 @@ describe('notice type classification', () => {
   it('returns null for anything it does not know', () => {
     expect(classify('')).toBeNull();
     expect(classify('Something Else Entirely')).toBeNull();
+  });
+});
+
+describe('the probe', () => {
+  it('spends one request, not one per profile code', async () => {
+    const { fetchPage, urls } = fake([notice()]);
+    const result = await probeSam({ apiKey: 'ZTPROBEKEY', fetchPage });
+
+    expect(result.ok).toBe(true);
+    expect(urls.length).toBe(1);
+  });
+
+  it('does not filter by any code, so a reachable host with an empty profile still answers', async () => {
+    const { fetchPage, urls } = fake([]);
+    await probeSam({ apiKey: 'ZTPROBEKEY', fetchPage });
+
+    expect(urls[0]!.searchParams.get('ncode')).toBeNull();
+    expect(urls[0]!.searchParams.get('ccode')).toBeNull();
+    expect(urls[0]!.searchParams.get('limit')).toBe('1');
+  });
+
+  it('sends the key, because a probe that skipped auth would answer the wrong question', async () => {
+    const { fetchPage, urls } = fake([]);
+    await probeSam({ apiKey: 'ZTPROBEKEY', fetchPage });
+
+    expect(urls[0]!.searchParams.get('api_key')).toBe('ZTPROBEKEY');
+  });
+
+  it('reports a missing key without making a request', async () => {
+    const { fetchPage, urls } = fake([]);
+    const result = await probeSam({ apiKey: '', fetchPage });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('SAM_API_KEY');
+    expect(urls.length).toBe(0);
+  });
+
+  it('returns the failure rather than throwing it', async () => {
+    // The caller wants a verdict to print. A probe that threw would land the person who ran it
+    // in a stack trace, which is the thing they were already looking at.
+    const result = await probeSam({
+      apiKey: 'ZTPROBEKEY',
+      fetchPage: async () => {
+        throw new Error('SAM.gov returned 403. API_KEY_INVALID');
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('403');
+    expect(result.totalRecords).toBeNull();
+  });
+
+  it('names the host it could not reach', async () => {
+    const result = await probeSam({
+      apiKey: 'ZTPROBEKEY',
+      baseUrl: 'https://api.example.invalid/opportunities/v2/search',
+      fetchPage: async () => {
+        throw new Error('boom');
+      },
+    });
+
+    expect(result.host).toBe('api.example.invalid');
   });
 });

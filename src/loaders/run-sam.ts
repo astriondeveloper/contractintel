@@ -1,6 +1,7 @@
 /**
  * SAM.gov opportunities entry point.
  *
+ *   npm run load:sam -- --probe            one request: is the key good and the host reachable
  *   npm run load:sam -- --dry-run          search and classify, write nothing
  *   npm run load:sam                       last 90 days, every code on the profile
  *   npm run load:sam -- --days 30
@@ -19,6 +20,7 @@
 import { withTransaction, closePool } from '../db/index.js';
 import {
   loadSamOpportunities,
+  probeSam,
   DEFAULT_NOTICE_TYPES,
   NOTICE_TYPES,
   type NoticeType,
@@ -36,6 +38,7 @@ SAM.gov opportunities. Targeted by the opportunity profile.
 
   npm run load:sam -- [options]
 
+  --probe                One request. Is the key good and the host reachable? Writes nothing.
   --dry-run              Search and classify. Writes nothing.
   --days <n>             Posted in the last n days. Default: 90.
   --from <mm/dd/yyyy>    Posted from. Overrides --days.
@@ -63,6 +66,19 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
     usage();
+    return;
+  }
+
+  // Before any of the option parsing, and before the database is touched: a probe is what somebody
+  // runs when nothing works, and it should not be able to fail for a second reason.
+  if (argv.includes('--probe')) {
+    const probe = await probeSam();
+    console.log('');
+    console.log(`  ${probe.ok ? 'reachable' : 'NOT REACHABLE'}   ${probe.host}`);
+    console.log('');
+    console.log(`  ${probe.detail}`);
+    console.log('');
+    if (!probe.ok) process.exitCode = 1;
     return;
   }
 

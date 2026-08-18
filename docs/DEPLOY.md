@@ -216,6 +216,25 @@ run full of `!` on day one is expected. The figure to watch across the first mon
 projections rest on a measurement rather than on the 365-day assumption: that number climbs on
 its own as SAM.gov history accrues, with no code change.
 
+### Checking the SAM.gov key from inside the container
+
+The key is the one piece of configuration that cannot be verified from the environment listing,
+and the network path to `api.sam.gov` is the one piece that differs between a laptop and a
+container app with egress rules. `--probe` settles both in one request:
+
+```bash
+az containerapp job start --name cie-sam --resource-group cie \
+  --command "npm" --args "run,load:sam,--,--probe"
+```
+
+It exits non-zero when the host is unreachable or the key is refused, so it works as a
+smoke step in a release pipeline. It says which of the two it was: a failure before SAM.gov
+answers is reported as a network or egress problem and explicitly not as a key problem, because
+that is the confusion that costs an afternoon. `SAM_API_KEY` is an
+[api.data.gov](https://api.data.gov/signup/) key registered for the Opportunities API — forty
+characters of letters and digits with no punctuation. A SAM.gov account role is not this
+credential.
+
 ### Developing against SAM.gov without a key
 
 `npm run sam:stub` serves the v2 endpoint's shape on port 3999, with invented notices:

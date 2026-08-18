@@ -158,8 +158,39 @@ function deadlineDay(value: string | null | undefined): string | null {
   return isoDay(value);
 }
 
+/**
+ * Why a request failed, in words that name the thing to go and fix.
+ *
+ * Four causes are indistinguishable from the stack trace and need entirely different actions, and
+ * the one that gets confused most is the first: on a corporate network `fetch` fails before it ever
+ * reaches SAM.gov, and Node reports that as a bare `fetch failed` with no host and no reason. A
+ * person seeing that will spend the afternoon on their key. So the network case is separated out and
+ * says which host could not be reached, because "the key is wrong" and "your egress policy does not
+ * allow api.sam.gov" look identical from here and are fixed in different buildings.
+ */
+function describeNetworkFailure(url: URL, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  const cause =
+    error instanceof Error && 'cause' in error && error.cause instanceof Error
+      ? ` (${error.cause.message})`
+      : '';
+
+  return new Error(
+    `Could not reach ${url.host}: ${detail}${cause}. This failed before SAM.gov answered, so it is ` +
+      'not the key. Usual causes, in order of likelihood on a corporate network: an egress policy ' +
+      `that does not allow ${url.host}, a proxy that needs HTTPS_PROXY set for this process, or a ` +
+      'TLS chain the process does not trust. Check the host is reachable at all with: curl -sS -o ' +
+      `/dev/null -w '%{http_code}' https://${url.host}/`,
+  );
+}
+
 async function httpFetch(url: URL): Promise<SamPage> {
-  const response = await fetch(url, { headers: { accept: 'application/json' } });
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { accept: 'application/json' } });
+  } catch (error) {
+    throw describeNetworkFailure(url, error);
+  }
 
   if (response.status === 429) {
     throw new Error(
@@ -169,9 +200,17 @@ async function httpFetch(url: URL): Promise<SamPage> {
     );
   }
   if (response.status === 401 || response.status === 403) {
+    // The body carries which of the two it is, and they are different problems: api.data.gov says
+    // API_KEY_INVALID for a bad key and API_KEY_UNAUTHORIZED for a key that exists but is not
+    // registered for this endpoint. Guessing between them sends somebody to the wrong screen.
+    const body = await response.text().catch(() => '');
     throw new Error(
-      `SAM.gov returned ${response.status}. Check SAM_API_KEY. A key from api.data.gov ` +
-        'must be registered for the Opportunities API specifically.',
+      `SAM.gov returned ${response.status}. ${body.slice(0, 300)}\n\n` +
+        'A key must be an api.data.gov key registered for the Opportunities API specifically; a key ' +
+        'that works against another api.data.gov endpoint returns 403 here. api.data.gov keys are 40 ' +
+        'characters of letters and digits with no punctuation, so a value that looks like anything ' +
+        'else is probably a different kind of credential. Get one at https://api.data.gov/signup/ ' +
+        'and put it in SAM_API_KEY.',
     );
   }
   if (!response.ok) {
@@ -180,6 +219,68 @@ async function httpFetch(url: URL): Promise<SamPage> {
   }
 
   return (await response.json()) as SamPage;
+}
+
+/** The verdict from {@link probeSam}: reachable or not, and why. */
+export interface ProbeResult {
+  readonly ok: boolean;
+  readonly host: string;
+  readonly detail: string;
+  readonly totalRecords: number | null;
+}
+
+/**
+ * One request, to answer "is my key good" without spending the day's quota finding out.
+ *
+ * A normal run makes one request per profile code, so a key problem costs seventeen requests to
+ * discover on the corpus this was built against and more on a real one. A public api.data.gov key
+ * allows a limited number per day, so the diagnosis should not eat the budget it is diagnosing.
+ *
+ * It asks for a single notice over a week, which is the cheapest question the endpoint answers, and
+ * reports what came back rather than throwing: the caller wants the verdict, not a stack trace.
+ */
+export async function probeSam(options: LoadSamOptions = {}): Promise<ProbeResult> {
+  const apiKey = options.apiKey ?? process.env.SAM_API_KEY ?? '';
+  const base = options.baseUrl ?? process.env.SAM_API_BASE ?? DEFAULT_BASE;
+  const url = new URL(base);
+
+  if (apiKey === '') {
+    return {
+      ok: false,
+      host: url.host,
+      detail: 'SAM_API_KEY is not set, so there is nothing to probe.',
+      totalRecords: null,
+    };
+  }
+
+  const to = new Date();
+  const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+  url.searchParams.set('limit', '1');
+  url.searchParams.set('offset', '0');
+  url.searchParams.set('postedFrom', mmddyyyy(from));
+  url.searchParams.set('postedTo', mmddyyyy(to));
+  url.searchParams.set('api_key', apiKey);
+
+  const fetchPage = options.fetchPage ?? httpFetch;
+  try {
+    const page = await fetchPage(url);
+    return {
+      ok: true,
+      host: url.host,
+      detail:
+        `${url.host} answered. ${page.totalRecords ?? 0} notice(s) posted in the last seven days ` +
+        'match an unfiltered search, which is only a reachability figure: a real run filters by the ' +
+        'codes on the opportunity profile.',
+      totalRecords: page.totalRecords ?? null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      host: url.host,
+      detail: error instanceof Error ? error.message : String(error),
+      totalRecords: null,
+    };
+  }
 }
 
 export async function loadSamOpportunities(

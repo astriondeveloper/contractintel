@@ -266,9 +266,19 @@ npm run signals -- --dry-run    # recompetes from the corpus, writing nothing
 npm run signals                 # detect and write
 
 npm run profile                 # build the targeting profile, once per corpus load
+npm run load:sam -- --probe     # one request: is the key good, is the host reachable
 npm run load:sam -- --dry-run   # search SAM.gov, writing nothing
 npm run load:sam                # fetch and write
 ```
+
+Run `--probe` first on a new environment. A full run makes one request per profile code, so a
+bad key or a blocked host otherwise costs seventeen requests to discover, against a daily quota;
+the probe spends one and says which of the two it was. It distinguishes them deliberately —
+`SAM_API_KEY` wrong and "your egress policy does not allow api.sam.gov" look identical from
+inside the process and get fixed by different people. `SAM_API_KEY` wants an
+[api.data.gov](https://api.data.gov/signup/) key registered for the Opportunities API: forty
+characters of letters and digits, no punctuation. A SAM.gov account role is a different
+credential and will not authenticate here.
 
 **Recompetes** come from the corpus. Contracts ending inside the window become signals,
 each carrying the position Astrion holds on it: prime incumbent, subcontractor, or none.
