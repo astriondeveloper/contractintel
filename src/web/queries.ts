@@ -2275,3 +2275,263 @@ export async function feedFreshness(): Promise<FeedFreshness> {
     cursor_clamped: extra?.cursor_clamped === true,
   };
 }
+
+/* =================================================================== govwin */
+
+/**
+ * GovWin opportunities, for the screen and the feed.
+ *
+ * The interesting rows are the early ones — Pre-RFP and Forecast Pre-RFP — because nothing else this
+ * system reads knows about a requirement before a solicitation exists. Everything later is either
+ * already visible through SAM.gov, where the notice is the better record, or finished.
+ *
+ * Every function here returns the date precision alongside the date. A month-precision estimate that
+ * loses its precision on the way to a screen is rendered as a claim about the first of the month, which
+ * is exactly what decision D32 stores the precision to prevent.
+ */
+
+export interface GovwinRow {
+  readonly govwin_id: string;
+  readonly status: string;
+  readonly opp_type: string;
+  readonly program_name: string | null;
+  readonly acronym: string | null;
+  readonly agency_code: string | null;
+  readonly agency_label: string | null;
+  readonly org_level_1: string | null;
+  readonly org_level_2: string | null;
+  readonly solicitation_number: string | null;
+  readonly value_usd: string | null;
+  readonly solicitation_date: Date | null;
+  readonly solicitation_date_precision: string | null;
+  readonly solicitation_date_basis: string | null;
+  readonly projected_award_date: Date | null;
+  readonly projected_award_date_precision: string | null;
+  readonly earliest_expiration_date: Date | null;
+  readonly advertised_interest: number | null;
+  readonly incumbent_names: string | null;
+  readonly govwin_url: string | null;
+  readonly naics_codes: string[] | null;
+  readonly days_until_expected: number | null;
+  readonly linked_pursuits: number;
+}
+
+const GOVWIN_SELECT = `
+  select g.govwin_id, g.status, g.opp_type, g.program_name, g.acronym,
+         g.agency_code, al.label as agency_label, g.org_level_1, g.org_level_2,
+         g.solicitation_number, g.value_usd::text,
+         g.solicitation_date, g.solicitation_date_precision, g.solicitation_date_basis,
+         g.projected_award_date, g.projected_award_date_precision, g.earliest_expiration_date,
+         g.advertised_interest, g.incumbent_names, g.govwin_url,
+         (select array_agg(n.naics_code order by n.is_primary desc, n.naics_code)
+            from govwin_opportunity_naics n where n.govwin_id = g.govwin_id) as naics_codes,
+         case when g.solicitation_date is null then null
+              else (g.solicitation_date - current_date) end as days_until_expected,
+         (select count(*)::int from pursuit p
+           where p.solicitation_number = g.solicitation_number
+             and g.solicitation_number is not null)                        as linked_pursuits
+    from govwin_opportunity g
+    left join code_label_current al
+           on al.code_type = 'agency' and al.code_value = g.agency_code`;
+
+/**
+ * The filter, shared by the list and its count so the pager cannot disagree with the table.
+ *
+ * `$4` is the view: `early` is the slice worth acting on, `all` is everything the export carried. The
+ * default is early, because a screen that opens on 944 expired records buries the 769 that matter.
+ */
+const GOVWIN_FILTER = `
+  ($1 = '' or g.program_name ilike '%' || $1 || '%'
+           or g.acronym ilike '%' || $1 || '%'
+           or g.solicitation_number ilike '%' || $1 || '%'
+           or g.org_level_1 ilike '%' || $1 || '%'
+           or g.org_level_2 ilike '%' || $1 || '%'
+           or g.incumbent_names ilike '%' || $1 || '%')
+  and ($2 = '' or g.status = $2)
+  and ($3 = '' or exists (select 1 from govwin_opportunity_naics n
+                           where n.govwin_id = g.govwin_id and n.naics_code like $3 || '%'))
+  and (case $4
+         when 'early' then g.status in ('Pre-RFP', 'Forecast Pre-RFP')
+         when 'all'   then true
+         else g.status in ('Pre-RFP', 'Forecast Pre-RFP')
+       end)`;
+
+export type GovwinView = 'early' | 'all';
+
+export function govwinOpportunities(
+  search: string,
+  status: string,
+  naics: string,
+  view: GovwinView,
+  sort: string,
+  limit: number,
+  offset: number,
+): Promise<Page<GovwinRow>> {
+  const params = [search, status, naics, view];
+  return paged<GovwinRow>(
+    `${GOVWIN_SELECT}
+      where ${GOVWIN_FILTER}
+      order by
+        -- Soonest first by default. Nulls last throughout: a row with no expected date is not
+        -- imminent, and sorting it to the top of a soonest-first list would say it was.
+        case when $5 = 'soonest' then g.solicitation_date end asc nulls last,
+        case when $5 = 'value'   then g.value_usd end desc nulls last,
+        case when $5 = 'watched' then g.advertised_interest end desc nulls last,
+        case when $5 = 'newest'  then g.first_seen_at end desc nulls last,
+        g.govwin_id
+      limit $6 offset $7`,
+    `select count(*)::text as n
+       from govwin_opportunity g
+      where ${GOVWIN_FILTER}`,
+    [...params, sort],
+    limit,
+    offset,
+    params,
+  );
+}
+
+export function govwinOpportunity(govwinId: string): Promise<GovwinRow | undefined> {
+  return query<GovwinRow>(`${GOVWIN_SELECT} where g.govwin_id = $1`, [govwinId]).then((r) => r[0]);
+}
+
+export interface GovwinCoverage {
+  readonly loaded: number;
+  readonly early: number;
+  readonly agency_resolved: number;
+  readonly agency_unresolved: number;
+  readonly early_with_expected_date: number;
+  readonly reachable_by_a_follow: number;
+  readonly psc_follows_that_cannot_match: number;
+  readonly company_follows_that_cannot_match: number;
+}
+
+export async function govwinCoverage(): Promise<GovwinCoverage> {
+  const [row] = await query<Record<keyof GovwinCoverage, string>>(`select * from govwin_coverage`);
+  const n = (value: string | undefined): number => Number(value ?? '0');
+  return {
+    loaded: n(row?.loaded),
+    early: n(row?.early),
+    agency_resolved: n(row?.agency_resolved),
+    agency_unresolved: n(row?.agency_unresolved),
+    early_with_expected_date: n(row?.early_with_expected_date),
+    reachable_by_a_follow: n(row?.reachable_by_a_follow),
+    psc_follows_that_cannot_match: n(row?.psc_follows_that_cannot_match),
+    company_follows_that_cannot_match: n(row?.company_follows_that_cannot_match),
+  };
+}
+
+/** The statuses present, for the filter, ordered by how many rows carry each. */
+export function govwinStatuses(): Promise<{ status: string; n: number }[]> {
+  return query(
+    `select status, count(*)::int as n from govwin_opportunity group by status order by n desc, status`,
+  );
+}
+
+/**
+ * The early GovWin requirements in one person's patch.
+ *
+ * The whole reason this source is worth loading. Matched through `follow_govwin`, which mirrors the
+ * pursuit matching so that a follow means the same thing whichever kind of record it reaches.
+ *
+ * Somebody with no follows sees the early slice unscoped, the same fallback the feed makes for
+ * requirements: an empty screen on day one is how a tool gets written off before it is configured.
+ */
+export function govwinForFollows(principal: string, limit: number): Promise<GovwinRow[]> {
+  return query<GovwinRow>(
+    `${GOVWIN_SELECT}
+      where g.status in ('Pre-RFP', 'Forecast Pre-RFP')
+        and ($1 = ''
+             or not exists (select 1 from follow f where f.principal_name = $1)
+             or exists (select 1 from follow_govwin fg
+                         where fg.govwin_id = g.govwin_id and fg.principal_name = $1))
+      order by g.solicitation_date asc nulls last, g.govwin_id
+      limit $2`,
+    [principal, limit],
+  );
+}
+
+/** How many early GovWin requirements are in this person's patch, for the tile on the feed. */
+export async function govwinPatchCount(principal: string): Promise<number> {
+  const [row] = await query<{ n: string }>(
+    `select count(*)::text as n
+       from govwin_early g
+      where $1 = ''
+         or not exists (select 1 from follow f where f.principal_name = $1)
+         or exists (select 1 from follow_govwin fg
+                     where fg.govwin_id = g.govwin_id and fg.principal_name = $1)`,
+    [principal],
+  );
+  return Number(row?.n ?? '0');
+}
+
+/** Which of a person's follows put a GovWin record in front of them. */
+export function whyInGovwinPatch(
+  govwinId: string,
+  principal: string,
+): Promise<{ follow_type: string; label: string | null; matched_field: string; matched_value: string | null }[]> {
+  return query(
+    `select distinct fg.follow_type, f.label, fg.matched_field, fg.matched_value
+       from follow_govwin fg
+       join follow f on f.follow_id = fg.follow_id
+      where fg.govwin_id = $1 and fg.principal_name = $2
+      order by fg.follow_type, fg.matched_field`,
+    [govwinId, principal],
+  );
+}
+
+/** Requirements in this system that share a solicitation number with a GovWin record. */
+export function govwinLinkedPursuits(
+  govwinId: string,
+): Promise<{ pursuit_id: string; signal_class: string; pursuit_source: string | null; pursuit_response_date: Date | null }[]> {
+  return query(
+    `select pursuit_id::text, signal_class, pursuit_source, pursuit_response_date
+       from govwin_pursuit_link where govwin_id = $1 order by pursuit_id`,
+    [govwinId],
+  );
+}
+
+export interface GovwinForecastGap {
+  readonly govwin_early_without_projection: number;
+  readonly govwin_early_total: number;
+  readonly projections_without_govwin: number;
+  readonly projections_total: number;
+  readonly agree_on_quarter: number;
+  readonly compared: number;
+}
+
+export async function govwinForecastGap(): Promise<GovwinForecastGap> {
+  const [row] = await query<Record<keyof GovwinForecastGap, string>>(`select * from govwin_forecast_gap`);
+  const n = (value: string | undefined): number => Number(value ?? '0');
+  return {
+    govwin_early_without_projection: n(row?.govwin_early_without_projection),
+    govwin_early_total: n(row?.govwin_early_total),
+    projections_without_govwin: n(row?.projections_without_govwin),
+    projections_total: n(row?.projections_total),
+    agree_on_quarter: n(row?.agree_on_quarter),
+    compared: n(row?.compared),
+  };
+}
+
+/** Where the two forecasts disagree most, worst first. The rows worth a person's attention. */
+export function govwinForecastDisagreements(limit: number): Promise<
+  {
+    govwin_id: string;
+    program_name: string | null;
+    joined_on_piid: string;
+    govwin_expects: Date;
+    we_expect: Date;
+    days_we_are_later: number;
+    same_quarter: boolean;
+    lead_source: string;
+    confidence: string;
+  }[]
+> {
+  return query(
+    `select govwin_id, program_name, joined_on_piid, govwin_expects, we_expect,
+            days_we_are_later, same_quarter, lead_source, confidence
+       from govwin_forecast_check
+      order by abs(days_we_are_later) desc
+      limit $1`,
+    [limit],
+  );
+}

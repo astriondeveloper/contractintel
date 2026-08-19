@@ -33,6 +33,7 @@ export const NAV: readonly NavGroup[] = [
       { href: '/', label: 'Dashboard', glyph: '◧' },
       { href: '/feed', label: 'Feed', glyph: '≡' },
       { href: '/follows', label: 'Follows', glyph: '◆' },
+      { href: '/govwin', label: 'Early requirements', glyph: '◌' },
       { href: '/forecast', label: 'Forecast', glyph: '◹' },
       { href: '/handoffs', label: 'Hand-offs', glyph: '➔' },
     ],
