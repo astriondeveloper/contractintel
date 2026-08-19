@@ -30,12 +30,18 @@ import {
   feed as feedRows,
   feedCounts,
   feedFreshness,
+  govwinForFollows,
+  govwinPatchCount,
   watermarkFor,
   type FeedRow,
   type FeedView,
+  type GovwinRow,
 } from '../queries.js';
 
 const VIEWS: readonly FeedView[] = ['new', 'patch', 'tracked', 'sent', 'dismissed', 'everything'];
+
+/** How many early GovWin requirements to preview. The screen has the rest. */
+const GOVWIN_PREVIEW = 4;
 const SORTS = ['newest', 'due', 'fit', 'value'] as const;
 
 export function stageChip(signalClass: string): Html {
@@ -188,6 +194,15 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
   // with confident-looking counts is the failure mode this line exists to prevent.
   const live = await feedFreshness();
 
+  // GovWin's early requirements, which are the only things in this system that have not been
+  // advertised yet. Kept as their own block rather than mixed into the list below: a GovWin record has
+  // no notice, no response date and an expected date that is a month rather than a day, so
+  // interleaving it with published notices would present a tracked guess as a deadline.
+  const [earlyCount, early] = await Promise.all([
+    govwinPatchCount(principal),
+    govwinForFollows(principal, GOVWIN_PREVIEW),
+  ]);
+
   // Somebody with no follows has an empty patch, so landing them on an empty "new" screen would
   // be the first and last thing they saw. They get the whole market instead, labelled as such,
   // with the follows screen one click away.
@@ -238,6 +253,12 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
       value: count(counts.in_patch),
       foot: `${count(counts.follows)} follow(s)`,
       href: '/follows',
+    },
+    {
+      label: 'Not yet advertised',
+      value: count(earlyCount),
+      foot: 'GovWin is tracking these before any solicitation exists',
+      href: '/govwin',
     },
     { label: 'Tracked', value: count(counts.tracked), foot: 'Things you are watching' },
     {
@@ -343,9 +364,37 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
     </div>`;
   };
 
+  const earlyBlock =
+    early.length === 0
+      ? html``
+      : html`<div class="notice info">
+          <h3>Coming, but not advertised yet</h3>
+          <p>
+            ${count(earlyCount)} requirement(s) GovWin is tracking with no solicitation to find.
+            Earlier than anything else on this screen, and less certain: an expected date below is the
+            month somebody estimated, not a published deadline.
+          </p>
+          ${early.map(
+            (item: GovwinRow) => html`<p>
+              <a href="/govwin?id=${item.govwin_id}"
+                >${truncate(item.program_name ?? `GovWin ${item.govwin_id}`, 72)}</a
+              >
+              <span class="sub"
+                >${item.status}
+                ${item.solicitation_date === null
+                  ? '· no expected date'
+                  : html`· expected ${new Date(item.solicitation_date).toISOString().slice(0, 7)}`}
+                ${item.value_usd === null ? '' : html`· ${usd(item.value_usd)}`}</span
+              >
+            </p>`,
+          )}
+          <p><a class="button quiet" href="/govwin">All early requirements</a></p>
+        </div>`;
+
   const body = html`
     ${liveStatus(live, since)}
     ${headline}
+    ${earlyBlock}
     ${counts.follows === 0 && ctx.user !== null
       ? html`<div class="notice info">
           <h3>This is the whole federal picture, not your patch</h3>

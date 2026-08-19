@@ -1094,6 +1094,51 @@ because an empty view and a broken view look identical.
 
 ---
 
+## D33. GovWin is matched by follows, and the two follow types that cannot match it are counted
+
+Migration 0027 loaded 2,629 GovWin records and gave them nowhere to appear. That was an omission rather
+than a staged rollout, and it is worth writing down because the failure mode is quiet: a source can be
+loaded, tested, documented and completely useless, because a requirement nobody can see is worth
+nothing.
+
+**Decision: mirror the pursuit matching rather than inventing a second idea of "my patch".**
+
+`follow_govwin` matches the same follow types on the same rules as `follow_pursuit` — a capability
+through the crosswalks BD authored, a raw NAICS code as a prefix so `5413` catches `541330`. D32 keeps
+GovWin records out of `pursuit`, and that stands: it is a decision about storage and identity. Whether
+something is in a person's patch is a different question, and if it were answered differently for the
+two kinds of record then a follow would mean two things and nobody could reason about their own feed.
+
+**Decision: show it beside the feed, not inside it.**
+
+The early requirements get their own block and their own tile rather than being interleaved with the
+requirement list. A GovWin record has no notice, no response date, and an expected date that is a month
+somebody estimated. Sorting it into a list of published solicitations by date would present a tracked
+guess as a deadline, which is the same false-precision error D32 stores the precision column to prevent,
+committed at the layout level instead of the storage level.
+
+**Decision: name the follow types this source cannot serve.**
+
+Two cannot match, and both would otherwise look exactly like "there is no early work in my area":
+
+- **PSC.** The export carries no product or service code at all. Nothing to match on.
+- **Company.** GovWin lists incumbents as one unparsed string — dozens of names on a multiple-award
+  vehicle, with commas inside the names themselves. Splitting that on commas would attribute work to
+  companies that are not on it. These names wait for the same entity resolution every other name in this
+  system goes through.
+
+Agency and office matching works but depends on GovWin's agency *names* resolving against labels the
+corpus has observed, which on the development corpus resolved none of 2,629. `govwin_coverage` counts all
+of it, the readiness report reports it, and the screen itself says it. A limitation stated is a
+limitation; a limitation unstated is a bug in the reader's understanding.
+
+**What this cost to find.** Nothing about the loaded data was wrong. The gap only became visible on being
+told the information should be able to show up in the tool — which is the second time in this session
+that a thing verified by querying the database turned out to be unreachable from a screen. The lesson is
+the same one the artifact's dead filter chips taught: a check that never renders the page is not a check.
+
+---
+
 ---
 
 ## Open questions

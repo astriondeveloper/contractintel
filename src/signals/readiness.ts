@@ -555,12 +555,100 @@ async function campaignSection(client: PoolClient): Promise<Section> {
   };
 }
 
+/* --------------------------------------------------------------------- govwin */
+
+/**
+ * Whether GovWin can reach anybody, which is not the same as whether it loaded.
+ *
+ * Two ways it silently cannot, and both look identical to "there is no early work in my area" from a
+ * chair. An unresolved agency code means an agency or office follow can never match the row, and GovWin
+ * names agencies rather than coding them. A PSC follow can never match at all, because the export has
+ * no PSC column. Counting them here is the difference between a limitation and a mystery.
+ */
+async function govwinSection(client: PoolClient): Promise<Section> {
+  const { rows } = await client.query<{
+    loaded: string;
+    early: string;
+    agency_resolved: string;
+    agency_unresolved: string;
+    early_with_expected_date: string;
+    reachable_by_a_follow: string;
+    psc_follows_that_cannot_match: string;
+    company_follows_that_cannot_match: string;
+  }>(`select * from govwin_coverage`);
+
+  const row = rows[0]!;
+  const loaded = Number(row.loaded);
+  const early = Number(row.early);
+  const reachable = Number(row.reachable_by_a_follow);
+
+  const readings: Reading[] = [
+    {
+      label: 'GovWin rows loaded',
+      value: count(row.loaded),
+      meaning: 'From the weekly export. Licensed Deltek data; the export is never committed.',
+      concern: loaded === 0,
+    },
+    {
+      label: 'Not yet advertised',
+      value: count(row.early),
+      meaning:
+        'Pre-RFP and Forecast Pre-RFP. The earliest warning this system has, and the only requirements ' +
+        'here with no solicitation to find.',
+    },
+    {
+      label: 'Early rows with an expected date',
+      value: share(Number(row.early_with_expected_date), early),
+      meaning: 'The rest are tracked without one, which is not a reason to invent one.',
+    },
+    {
+      label: 'Reachable by somebody\'s follow',
+      value: count(row.reachable_by_a_follow),
+      meaning:
+        loaded > 0 && reachable === 0
+          ? 'Loaded but reaching nobody: every row is browse-only until a follow matches it.'
+          : 'Rows that appear in at least one person\'s patch rather than only on the browse screen.',
+      concern: loaded > 0 && reachable === 0,
+    },
+    {
+      label: 'GovWin rows with an agency code',
+      value: share(Number(row.agency_resolved), loaded),
+      meaning:
+        'GovWin names agencies rather than coding them, and a name resolves only where the corpus has ' +
+        'observed that label. An agency or office follow cannot match the rest. Loading FPDS history ' +
+        'improves this; wording differences between the two sources may cap it.',
+      concern: loaded > 0 && Number(row.agency_resolved) === 0,
+    },
+  ];
+
+  if (Number(row.psc_follows_that_cannot_match) > 0) {
+    readings.push({
+      label: 'PSC follows that cannot match GovWin',
+      value: count(row.psc_follows_that_cannot_match),
+      meaning: 'The export carries no product or service code. A gap in the source, not in the follow.',
+      concern: true,
+    });
+  }
+
+  return {
+    title: 'GovWin, and whether it reaches anybody',
+    readings,
+    next:
+      loaded === 0
+        ? 'Load an export: npm run load:govwin -- --file <export.xlsx>'
+        : reachable === 0
+          ? 'Follow a NAICS code or a capability area, which is what matches these rows today: /follows'
+          : undefined,
+  };
+}
+
 export async function readiness(client: PoolClient): Promise<Section[]> {
   return [
     await corpusSection(client),
     await forecastSection(client),
     await feedSection(client),
     await campaignSection(client),
+    await govwinSection(client),
     await sourceSection(client),
   ];
 }

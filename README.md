@@ -91,6 +91,7 @@ ingress and the fact that the interface has no authentication.
 | Dashboard | What is new in your patch, what is coming, and whether any of it reached TechnoMile |
 | Feed | What is new on your follows since you last looked. Track, dismiss or hand off, per person |
 | Follows | Your patch: capability areas, agencies and offices, companies, raw NAICS, PSC or keyword |
+| Early requirements | What GovWin is tracking before it is advertised. An estimated date is a month and says whose estimate |
 | Forecast | What will solicit and roughly when, by fiscal quarter, with the contracts behind each bar |
 | Hand-offs | Every requirement somebody carried into TechnoMile, and how far ahead of the deadline |
 | Requirement | One requirement, its hand-off panel, and the rule trace behind every figure of its score |
@@ -410,6 +411,29 @@ the way in; read as dollars every figure would be a thousand times too small and
 this repository publishes a self-contained snapshot that embeds every row it renders. Holding them would
 put licensed content one careless publish away from a public URL, so the row links back to GovWin
 instead. The export itself must never be committed.
+
+#### Where it shows up
+
+Loading it was not enough — it had to be reachable. Three places:
+
+**`/govwin`, "Early requirements" in the rail.** Opens on the 769 not-yet-advertised rows rather than on
+all 2,629, because a screen that opens on 944 expired records buries what matters. Filter by stage or
+NAICS prefix, sort by soonest expected, value or how many companies are watching it on GovWin. Each row
+links to a detail screen, and out to GovWin for the analysis this system does not store.
+
+**The feed.** A tile counts the early requirements in your patch and a block previews the soonest, kept
+separate from the requirement list rather than interleaved: a GovWin row has no notice, no response date
+and an expected date that is a month, so mixing it in would present a tracked guess as a deadline.
+
+**Follows.** `follow_govwin` mirrors the pursuit matching, so a follow means the same thing whichever
+kind of record it reaches — a NAICS follow on `5413` matches a GovWin row under `541330` exactly as it
+matches a notice.
+
+Two follow types cannot match this source, and both are counted rather than hidden. **PSC** cannot,
+because the export has no product or service code at all. **Company** cannot yet, because GovWin lists
+incumbents as one unparsed string and splitting a name list on commas would attribute work to companies
+that are not on it. `npm run readiness` and the screen itself both say so, so an empty patch does not
+read as an empty market.
 
 #### The forecast finally has an outside check
 

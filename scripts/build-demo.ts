@@ -40,6 +40,7 @@ import { NAV } from '../src/web/layout.js';
 import { overview } from '../src/web/pages/overview.js';
 import { dashboard } from '../src/web/pages/dashboard.js';
 import { feedScreen } from '../src/web/pages/feed.js';
+import { govwinScreen } from '../src/web/pages/govwin.js';
 import { forecast, forecastDetail } from '../src/web/pages/forecast.js';
 import { handoffs } from '../src/web/pages/handoffs.js';
 import { requirement } from '../src/web/pages/requirement.js';
@@ -69,6 +70,10 @@ interface Screen {
 const SCREENS: readonly Screen[] = [
   { key: 'dashboard', label: 'Dashboard', path: '/', render: dashboard },
   { key: 'feed', label: 'Feed', path: '/feed', render: feedScreen },
+  // Carried because it is the earliest thing this system knows and would otherwise be invisible to
+  // anyone reading the snapshot. Structured fields only: the licensed prose is not stored, so there
+  // is none here to publish.
+  { key: 'govwin', label: 'Early requirements', path: '/govwin', render: govwinScreen },
   { key: 'forecast', label: 'Forecast', path: '/forecast', render: forecast },
   { key: 'handoffs', label: 'Hand-offs', path: '/handoffs', render: handoffs },
   { key: 'campaigns', label: 'Campaigns', path: '/campaigns', render: campaignsScreen },

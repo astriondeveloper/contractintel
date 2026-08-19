@@ -46,6 +46,7 @@ import { follows } from './pages/follows.js';
 import { forecast, forecastDetail, forecastJson } from './pages/forecast.js';
 import { handoffs, handoffsJson } from './pages/handoffs.js';
 import { campaignDetail, campaignsJson, campaignsScreen } from './pages/campaigns.js';
+import { govwinScreen } from './pages/govwin.js';
 import { requirement, requirementFields } from './pages/requirement.js';
 import { overview, overviewJson } from './pages/overview.js';
 import { entityDetail, entityList } from './pages/entities.js';
@@ -107,6 +108,7 @@ const ROUTES: Record<string, Handler> = {
   '/forecast': forecast,
   '/handoffs': handoffs,
   '/campaigns': campaignsScreen,
+  '/govwin': govwinScreen,
   // Kept and unlisted. The corpus overview answers "what is loaded", which is a question for
   // whoever maintains the system rather than the first thing BD should see.
   '/overview': overview,
