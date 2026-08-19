@@ -80,15 +80,36 @@ export async function runAcceptanceChecks(): Promise<Result[]> {
               (select entity_id from entity where canonical_name = 'Astrion')`,
     );
     const share = byEntityMap === 0 ? 0 : byLegalName / byEntityMap;
-    record(
-      1,
-      'Astrion search returns the whole history, not 0.7 percent',
-      byEntityMap > byLegalName * 10 ? 'PASS' : 'FAIL',
-      `entity map returns ${byEntityMap.toLocaleString()}, ` +
-        `the legal name alone returns ${byLegalName.toLocaleString()} ` +
-        `(${(share * 100).toFixed(1)} percent of the resolved history). ` +
-        `${contractActions.toLocaleString()} contract actions loaded in total.`,
-    );
+    if (byEntityMap === 0 && byLegalName === 0) {
+      // A corpus with rows in it but no Astrion history in them. Neither search has anything
+      // to return, and `0 > 0` is false, so the arithmetic below reads that as the failure it
+      // exists to catch -- an entity map no better than a legal-name search -- when what has
+      // actually happened is that nothing was loaded for either search to find. That state is
+      // reachable from the API loaders alone: three transactions from a contract pull make
+      // `contract_action` non-empty without putting a single Astrion action in it.
+      //
+      // The failure this test is for survives: an entity map that returns nothing while the
+      // legal name returns rows still fails, because only one of the two counts is zero.
+      record(
+        1,
+        'Astrion search returns the whole history, not 0.7 percent',
+        'BLOCKED',
+        `${contractActions.toLocaleString()} contract action(s) are loaded and none resolves to ` +
+          'the Astrion family, so neither search has history to return and there is nothing to ' +
+          'compare. This test needs Astrion history in the corpus. ' +
+          'Run: npm run load:fpds -- --dir <directory of exports>',
+      );
+    } else {
+      record(
+        1,
+        'Astrion search returns the whole history, not 0.7 percent',
+        byEntityMap > byLegalName * 10 ? 'PASS' : 'FAIL',
+        `entity map returns ${byEntityMap.toLocaleString()}, ` +
+          `the legal name alone returns ${byLegalName.toLocaleString()} ` +
+          `(${(share * 100).toFixed(1)} percent of the resolved history). ` +
+          `${contractActions.toLocaleString()} contract actions loaded in total.`,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
