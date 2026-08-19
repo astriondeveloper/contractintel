@@ -430,6 +430,23 @@ describe('the probe', () => {
     expect(result.totalRecords).toBeNull();
   });
 
+  it('reads an empty SAM_API_BASE as no override at all', async () => {
+    // `.env.example` ships `SAM_API_BASE=` with "leave empty for the real API" beside it, so the
+    // documented first step puts an empty string in the environment. Read literally that is not a
+    // URL, and every run died in `new URL('')` before it could report anything a person could act
+    // on. Empty means unset, the same way it already does for the key.
+    const before = process.env.SAM_API_BASE;
+    process.env.SAM_API_BASE = '';
+    try {
+      const result = await probeSam({ apiKey: '' });
+      expect(result.host).toBe('api.sam.gov');
+      expect(result.detail).toContain('SAM_API_KEY');
+    } finally {
+      if (before === undefined) delete process.env.SAM_API_BASE;
+      else process.env.SAM_API_BASE = before;
+    }
+  });
+
   it('names the host it could not reach', async () => {
     const result = await probeSam({
       apiKey: 'ZTPROBEKEY',

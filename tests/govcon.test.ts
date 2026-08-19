@@ -20,6 +20,8 @@ import { pool, closePool } from '../src/db/index.js';
 import {
   GovconClient,
   probeGovcon,
+  resolveBase,
+  DEFAULT_BASE,
   RESERVE_REQUESTS,
   type Envelope,
   type Fetched,
@@ -173,6 +175,41 @@ describe('the client', () => {
     expect(third).toBeNull();
     expect(urls.length).toBe(2);
     expect(api.stoppedEarly).toContain('2-request cap');
+  });
+});
+
+describe('the endpoint', () => {
+  // `.env.example` ships `GOVCON_API_BASE=` with "leave empty for the real API" beside it, so a
+  // person following the documented first step has an empty string in the environment. `??` reads
+  // that as the answer, and every request then dies in `new URL('')` with `Invalid URL` and no
+  // mention of the variable that caused it. Empty means unset, as it already does for the key.
+  const withBase = async (value: string | undefined, run: () => void): Promise<void> => {
+    const before = process.env.GOVCON_API_BASE;
+    if (value === undefined) delete process.env.GOVCON_API_BASE;
+    else process.env.GOVCON_API_BASE = value;
+    try {
+      run();
+    } finally {
+      if (before === undefined) delete process.env.GOVCON_API_BASE;
+      else process.env.GOVCON_API_BASE = before;
+    }
+  };
+
+  it('falls back to the real API when the override is empty', async () => {
+    await withBase('', () => {
+      expect(resolveBase({})).toBe(DEFAULT_BASE);
+      expect(() => new URL(`${resolveBase({})}/opportunities`)).not.toThrow();
+    });
+  });
+
+  it('falls back when the override is whitespace', async () => {
+    await withBase('   ', () => expect(resolveBase({})).toBe(DEFAULT_BASE));
+  });
+
+  it('still honours a real override, trailing slash and all', async () => {
+    await withBase('http://localhost:3998/api/v1/', () =>
+      expect(resolveBase({})).toBe('http://localhost:3998/api/v1'),
+    );
   });
 });
 

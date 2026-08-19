@@ -192,14 +192,20 @@ export async function runAcceptanceChecks(): Promise<Result[]> {
       4,
       'No past performance evidence gives no rank',
       'BLOCKED',
-      'The scoring engine is not built yet. This is the next phase of work.',
+      'Nothing has been scored, so there is no assessment to read. The scoring engine is built ' +
+        'and versioned; it has not been run against this corpus. Run: npm run score.',
     );
-    record(5, 'A failed gate shows no score', 'BLOCKED', 'The scoring engine is not built yet.');
+    record(
+      5,
+      'A failed gate shows no score',
+      'BLOCKED',
+      'Nothing has been scored, so no gate has been evaluated. Run: npm run score.',
+    );
     record(
       7,
       'Every score opens a rule trace with a source link',
       'BLOCKED',
-      'The scoring engine is not built yet.',
+      'Nothing has been scored, so no rule trace exists to open. Run: npm run score.',
     );
   } else {
     const badRank = await count(
@@ -291,7 +297,7 @@ export async function runAcceptanceChecks(): Promise<Result[]> {
       signals > 0
         ? `${signals} recompete signal(s) present.`
         : `${candidates} contract action(s) fall in the 12 to 36 month window and would produce ` +
-          'a signal. Recompete detection is not built yet.',
+          'a signal. Recompete detection has not been run against them. Run: npm run signals.',
     );
   }
 

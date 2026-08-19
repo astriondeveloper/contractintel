@@ -49,6 +49,19 @@ export const SOURCE_SYSTEM = 'sam_opportunity';
 
 const DEFAULT_BASE = 'https://api.sam.gov/opportunities/v2/search';
 
+/**
+ * The endpoint to ask, given an override that may be absent, empty, or real.
+ *
+ * `SAM_API_BASE` exists to point the loader at `scripts/sam-stub.ts`, and `.env.example` ships it
+ * empty with "leave empty for the real API" beside it. `??` alone would read that empty string as
+ * the endpoint and `new URL('')` throws `Invalid URL` before the loader can say anything useful, so
+ * an empty override is treated as no override at all.
+ */
+function resolveBase(override: string | undefined): string {
+  const base = (override ?? process.env.SAM_API_BASE ?? '').trim();
+  return base === '' ? DEFAULT_BASE : base;
+}
+
 /** SAM.gov rejects a posted range wider than a year. */
 const MAX_RANGE_DAYS = 365;
 
@@ -256,7 +269,7 @@ export interface ProbeResult {
  */
 export async function probeSam(options: LoadSamOptions = {}): Promise<ProbeResult> {
   const apiKey = options.apiKey ?? process.env.SAM_API_KEY ?? '';
-  const base = options.baseUrl ?? process.env.SAM_API_BASE ?? DEFAULT_BASE;
+  const base = resolveBase(options.baseUrl);
   const url = new URL(base);
 
   if (apiKey === '') {
@@ -305,7 +318,7 @@ export async function loadSamOpportunities(
   const fetchPage = options.fetchPage ?? httpFetch;
   const usingHttp = options.fetchPage === undefined;
   const apiKey = options.apiKey ?? process.env.SAM_API_KEY ?? '';
-  const base = options.baseUrl ?? process.env.SAM_API_BASE ?? DEFAULT_BASE;
+  const base = resolveBase(options.baseUrl);
   const noticeTypes = options.noticeTypes ?? DEFAULT_NOTICE_TYPES;
   const pageSize = Math.min(options.pageSize ?? 200, MAX_PAGE);
   const maxRequests = options.maxRequests ?? 200;

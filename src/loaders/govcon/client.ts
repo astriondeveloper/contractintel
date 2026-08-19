@@ -106,7 +106,13 @@ export function resolveKey(options: ClientOptions): string {
 }
 
 export function resolveBase(options: ClientOptions): string {
-  return (options.baseUrl ?? process.env.GOVCON_API_BASE ?? DEFAULT_BASE).replace(/\/+$/, '');
+  // An override that is set-but-empty means the same thing as one that is unset. This is not
+  // hypothetical tidiness: `.env.example` ships `GOVCON_API_BASE=` with "leave empty for the real
+  // API" beside it, so the documented first step produces exactly that value, and `??` would take
+  // the empty string as the answer and hand `new URL('')` a base that throws `Invalid URL`. The
+  // key resolver already reads an empty value as "not set"; the base now agrees with it.
+  const override = (options.baseUrl ?? process.env.GOVCON_API_BASE ?? '').trim();
+  return (override === '' ? DEFAULT_BASE : override).replace(/\/+$/, '');
 }
 
 export function requireKey(options: ClientOptions): string {
