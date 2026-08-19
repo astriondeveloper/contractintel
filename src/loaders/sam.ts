@@ -191,24 +191,40 @@ async function httpFetch(url: URL): Promise<SamPage> {
   }
 
   if (response.status === 429) {
+    // The daily allowance depends on the *role* on the SAM.gov account, not on the key, and the
+    // difference between the tiers decides whether this loader can complete a run at all:
+    //
+    //   non-federal, no role      10 requests/day    a run needs one per profile code, so 17. Unusable.
+    //   non-federal, with a role  1,000 requests/day  comfortable
+    //   federal system account    10,000 requests/day
+    //
+    // Somebody hitting this on the bottom tier will try shortening the date range forever, because
+    // the range is not what is wrong: the number of *codes* is, and no narrowing gets 17 under 10.
+    // Naming the tiers is the difference between a fix and an afternoon.
     throw new Error(
-      'SAM.gov returned 429: the API key is over its rate limit. A public key allows a ' +
-        'limited number of requests per day. Narrow the profile, shorten the date range, ' +
-        'or wait for the quota to reset.',
+      'SAM.gov returned 429: over the daily rate limit.\n\n' +
+        'The allowance depends on the role on the SAM.gov account rather than on the key: a ' +
+        'non-federal user with no role gets 10 requests a day, one with a role gets 1,000, and a ' +
+        'federal system account gets 10,000. This loader makes one request per code on the ' +
+        'opportunity profile, so on the 10-a-day tier a complete run is not possible at any date ' +
+        'range — request a role on the SAM.gov account. On the 1,000 tier, narrow the profile or ' +
+        'wait for the reset.',
     );
   }
   if (response.status === 401 || response.status === 403) {
-    // The body carries which of the two it is, and they are different problems: api.data.gov says
+    // The body carries which of the two it is, and they are different problems: the gateway says
     // API_KEY_INVALID for a bad key and API_KEY_UNAUTHORIZED for a key that exists but is not
-    // registered for this endpoint. Guessing between them sends somebody to the wrong screen.
+    // entitled to this endpoint. Guessing between them sends somebody to the wrong screen.
     const body = await response.text().catch(() => '');
     throw new Error(
       `SAM.gov returned ${response.status}. ${body.slice(0, 300)}\n\n` +
-        'A key must be an api.data.gov key registered for the Opportunities API specifically; a key ' +
-        'that works against another api.data.gov endpoint returns 403 here. api.data.gov keys are 40 ' +
-        'characters of letters and digits with no punctuation, so a value that looks like anything ' +
-        'else is probably a different kind of credential. Get one at https://api.data.gov/signup/ ' +
-        'and put it in SAM_API_KEY.',
+        'The key for this API comes from SAM.gov itself, at ' +
+        'https://sam.gov/workspace/profile/account-details under "Public API Key" — you have to ' +
+        'enter your account password to reveal it. A key generated at api.data.gov/signup does not ' +
+        'work here: both are GSA, but they are separate systems with separate authentication, which ' +
+        'is the single most common reason for a 403 on this endpoint. If the key is right, the other ' +
+        'cause is the role: the daily allowance is 10 requests without a role on the account and ' +
+        '1,000 with one.',
     );
   }
   if (!response.ok) {
@@ -231,8 +247,9 @@ export interface ProbeResult {
  * One request, to answer "is my key good" without spending the day's quota finding out.
  *
  * A normal run makes one request per profile code, so a key problem costs seventeen requests to
- * discover on the corpus this was built against and more on a real one. A public api.data.gov key
- * allows a limited number per day, so the diagnosis should not eat the budget it is diagnosing.
+ * discover on the corpus this was built against and more on a real one. The daily allowance is 10
+ * requests without a role on the SAM.gov account, so on that tier a failed run costs the entire day's
+ * budget and the probe would otherwise be unaffordable at exactly the moment it is most needed.
  *
  * It asks for a single notice over a week, which is the cheapest question the endpoint answers, and
  * reports what came back rather than throwing: the caller wants the verdict, not a stack trace.
@@ -296,8 +313,9 @@ export async function loadSamOpportunities(
 
   if (usingHttp && apiKey === '') {
     throw new Error(
-      'SAM_API_KEY is not set. Get a key from api.data.gov, register it for the ' +
-        'Opportunities API, and put it in the environment. It is never committed: .env is ' +
+      'SAM_API_KEY is not set. Get it from SAM.gov itself, at ' +
+        'https://sam.gov/workspace/profile/account-details under "Public API Key" — not from ' +
+        'api.data.gov, whose keys do not work against SAM.gov APIs. It is never committed: .env is ' +
         'gitignored and .env.example carries the name only.',
     );
   }

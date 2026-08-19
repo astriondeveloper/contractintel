@@ -275,10 +275,23 @@ Run `--probe` first on a new environment. A full run makes one request per profi
 bad key or a blocked host otherwise costs seventeen requests to discover, against a daily quota;
 the probe spends one and says which of the two it was. It distinguishes them deliberately —
 `SAM_API_KEY` wrong and "your egress policy does not allow api.sam.gov" look identical from
-inside the process and get fixed by different people. `SAM_API_KEY` wants an
-[api.data.gov](https://api.data.gov/signup/) key registered for the Opportunities API: forty
-characters of letters and digits, no punctuation. A SAM.gov account role is a different
-credential and will not authenticate here.
+inside the process and get fixed by different people.
+
+Two things about the key, both of which cost an afternoon if you get them wrong. It comes from
+**SAM.gov**, at `sam.gov/workspace/profile/account-details` under "Public API Key", and it asks for
+your account password to reveal it — a key from `api.data.gov/signup` does **not** work here, because
+despite both being GSA they are separate systems with separate authentication. And the daily
+allowance is set by the **role on the SAM.gov account**, not by the key:
+
+| Account | Requests per day |
+|---|---|
+| Non-federal, no role | 10 |
+| Non-federal, with a role | 1,000 |
+| Federal system account | 10,000 |
+
+A run needs one request per profile code, so **the no-role tier cannot complete a run at any date
+range** — 17 does not fit in 10, and narrowing the dates does not change the number of codes. If you
+are on that tier, request a role on the account rather than tuning the query.
 
 **Recompetes** come from the corpus. Contracts ending inside the window become signals,
 each carrying the position Astrion holds on it: prime incumbent, subcontractor, or none.
@@ -299,8 +312,8 @@ things closing soon:
 | Presolicitation, solicitation, combined synopsis | `active_solicitation` — out now |
 | Award notice, with `--include-awards` | `market_movement` — competitive intelligence |
 
-`SAM_API_KEY` comes from api.data.gov, registered for the Opportunities API. It is read from
-the environment and never written to the database; a test asserts it never reaches an
+`SAM_API_KEY` comes from SAM.gov's own Account Details page, not from api.data.gov. It is read
+from the environment and never written to the database; a test asserts it never reaches an
 archived payload.
 
 The window is not a constant in the code. It lives in `signal_class_threshold`, which BD Ops

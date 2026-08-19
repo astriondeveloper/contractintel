@@ -505,7 +505,7 @@ async function sourceSection(client: PoolClient): Promise<Section> {
         : !govconConfigured
           ? 'Get a key at govconapi.com, then npm run load:govcon -- --probe'
           : !samConfigured
-            ? 'Get a key from api.data.gov, registered for the Opportunities API.'
+            ? 'Get a key from sam.gov/workspace/profile/account-details, under Public API Key.'
             : cursors.length === 0
               ? 'Run the sync once: npm run load:govcon'
               : undefined,

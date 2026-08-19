@@ -206,8 +206,12 @@ done
 Both keys are Container Apps secrets and secrets only. They are read from the environment, never
 written to the database, and a test per loader asserts neither reaches an archived payload.
 
-`SAM_API_KEY` comes from api.data.gov and has to be registered for the Opportunities API
-specifically; a key that works against another api.data.gov endpoint returns 403 there.
+`SAM_API_KEY` comes from **SAM.gov**, at `sam.gov/workspace/profile/account-details` under "Public
+API Key" — not from api.data.gov, whose keys do not authenticate against SAM.gov APIs at all. And the
+daily allowance is set by the role on the SAM.gov account rather than by the key: 10 requests with no
+role, 1,000 with one, 10,000 for a federal system account. A run makes one request per profile code,
+so the no-role tier cannot complete one at any date range. This is why the job below is weekly rather
+than daily even on the middle tier, and why `load:govcon` is the primary feed.
 
 `GOVCON_API_KEY` comes from govconapi.com and is sent as a bearer token. Note the two different
 failure modes: 401 is a key the API does not recognise, and 403 is a key it recognises on a plan
@@ -252,10 +256,13 @@ az containerapp job start --name cie-sam --resource-group cie \
 It exits non-zero when the host is unreachable or the key is refused, so it works as a
 smoke step in a release pipeline. It says which of the two it was: a failure before SAM.gov
 answers is reported as a network or egress problem and explicitly not as a key problem, because
-that is the confusion that costs an afternoon. `SAM_API_KEY` is an
-[api.data.gov](https://api.data.gov/signup/) key registered for the Opportunities API — forty
-characters of letters and digits with no punctuation. A SAM.gov account role is not this
-credential.
+that is the confusion that costs an afternoon.
+
+`SAM_API_KEY` comes from `sam.gov/workspace/profile/account-details`, field "Public API Key"; the page
+asks for the account password before revealing it. A key from api.data.gov does not work. The role on
+that SAM.gov account is not the credential but it does set the quota — 10 requests a day without one
+and 1,000 with one — so a deployment that authenticates fine and still cannot complete a run is
+usually a role problem rather than a key problem.
 
 ### Developing against SAM.gov without a key
 
@@ -270,6 +277,31 @@ SAM_API_BASE=http://localhost:3999/opportunities/v2/search \
 It answers 401 without a key and 400 without the posted range, because the real endpoint
 does, and the tests inject the fetch function rather than using it — so this is the only thing
 that exercises the actual HTTP path, the parameter shape and the pagination.
+
+### The GovCon API MCP server, and why it is not the integration
+
+GovCon API also publishes an MCP server, which lets Claude Code (or Cursor, or any MCP client) query
+SAM.gov opportunities, awards and exclusions conversationally with the same key:
+
+```bash
+claude mcp add --transport http govconapi https://govconapi.com/mcp \
+  --header "Authorization: Bearer $GOVCON_API_KEY"
+```
+
+MCP access is included on the paid plans and on the trial. **It is a development and research tool,
+not a path into this system**, and the distinction is worth being explicit about because it is an easy
+one to blur.
+
+The loaders exist to put rows in PostgreSQL on a schedule, idempotently, with provenance, so that
+twenty people share one corpus and the audit trail can say where every figure came from. An MCP client
+answers a question for one person in one conversation and writes nothing. Nothing on any screen here
+could be built on it.
+
+What it is genuinely good for is the one weakness in this integration: **the field mapping was written
+from the published guide rather than from observed responses.** Point an MCP client at the API, ask it
+for one opportunity and one contract, and compare the field names against `GovconOpportunity` and
+`GovconContract`. That is the same job `--sample` does from the CLI, and either is worth doing once
+before trusting a scheduled run.
 
 ### Developing against GovCon API without a key
 

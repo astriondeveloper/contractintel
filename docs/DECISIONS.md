@@ -965,6 +965,72 @@ same error without a symptom.
 
 ---
 
+## D30. The SAM.gov key is not an api.data.gov key, and the role is the quota
+
+This is recorded as a decision rather than a note because the build shipped with the wrong guidance in
+it, in three places, and the wrong guidance was worse than none: it named a specific external service
+and a specific key format, so somebody following it would have generated a credential that cannot work
+and then spent the afternoon wondering why.
+
+**Two corrections.**
+
+The key for the Get Opportunities API comes from SAM.gov itself, at
+`sam.gov/workspace/profile/account-details`, field "Public API Key", revealed after re-entering the
+account password. A key from `api.data.gov/signup` does **not** authenticate against SAM.gov APIs.
+Both are GSA and both sit behind the same gateway, which is exactly why the mistake is easy and why the
+error message now says so in as many words.
+
+The daily allowance is a property of the **role on the SAM.gov account**, not of the key:
+
+| Account | Requests per day |
+|---|---|
+| Non-federal, no role | 10 |
+| Non-federal, with a role | 1,000 |
+| Federal system account | 10,000 |
+
+The consequence is not a matter of degree. This loader makes one request per code on the opportunity
+profile — seventeen on the profile it was built against — so **on the no-role tier a complete run is
+arithmetically impossible**, at any date range and any page size. The failure presents as a 429 partway
+through, which reads like a tuning problem, and no amount of narrowing the query fixes it because the
+query is not what is wrong. So the 429 message now names all three tiers and says to go and get a role.
+
+That also reframes something already decided. D25 made GovCon API the primary notice feed on the
+strength of the delta endpoint and an hourly rather than daily quota. The tier table makes that
+argument stronger than it was written: the direct SAM.gov path is not merely coarser, it is unusable
+until somebody has a role on the account, and the ceiling is 1,000 a day once they do.
+
+**Not decided here:** whether the key format assertion should exist at all. The old message claimed a
+40-character alphanumeric shape and used it to tell people their credential looked wrong. That claim
+was about api.data.gov keys, was never verified for SAM.gov's own issuer, and is now removed rather
+than corrected — `--probe` answers the question in one request, which is better than a guess about a
+string.
+
+---
+
+## D31. The MCP server is a research tool and deliberately not an integration path
+
+GovCon API publishes an MCP server. It uses the same key, exposes opportunities, awards, entities and
+exclusions, and installs into Claude Code in one command.
+
+**Decision: document it, use it for verification, and keep it out of the data path.**
+
+The temptation is real, because it looks like a shortcut past a lot of loader code. It is not, for a
+reason that has nothing to do with the quality of the server: an MCP client answers one person's
+question in one conversation and writes nothing. This system exists so that twenty-odd people share
+one corpus, so that a figure on a screen can be traced to the run that produced it, and so that a
+scheduled job can be idempotent. None of the four screens could be built on a conversational tool, and
+a hybrid — some rows from loaders, some from a chat session — would destroy the provenance that makes
+the rest trustworthy.
+
+Where it earns its place is the one soft spot in this integration. The GovCon field mappings were
+written from the published guide rather than from observed responses, because the network available
+while building this could not reach the host. An MCP client pointed at the live API is the cheapest way
+to check the real field names against `GovconOpportunity` and `GovconContract` before a scheduled run
+is trusted. `--sample` does the same thing from the CLI. Either is worth doing once; doing neither means
+a field the build does not read is a field silently not reaching the feed.
+
+---
+
 ---
 
 ## Open questions
