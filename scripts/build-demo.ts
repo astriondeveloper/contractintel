@@ -158,6 +158,34 @@ function rewriteLinks(
 
     if (pathname === '') return 'href="#dashboard"';
 
+    // The feed's own controls, which are query strings on the same path.
+    //
+    // Collapsing these to '#feed' — which is what happened before — turned six view tabs, four stage
+    // filters, four position filters and four sort orders into sixteen-odd links pointing at the anchor
+    // the reader was already on. Nothing was broken in a way a browser would report; every control
+    // simply did nothing, which is worse, because it reads as a dead application rather than a
+    // snapshot with limits.
+    //
+    // The rows are all in the document already, so the query string is carried onto the link as data
+    // and applied client-side. Only the parameters the row markup can answer are carried: `q` stays a
+    // text search handled by the existing filter, and a page number cannot be honoured because the
+    // snapshot holds one page.
+    const query = rest.includes('?') ? rest.slice(rest.indexOf('?') + 1) : '';
+    if (pathname === 'feed' && query !== '') {
+      const params = new URLSearchParams(query);
+      const carried: string[] = [];
+      for (const key of ['view', 'class', 'position', 'sort'] as const) {
+        const value = params.get(key);
+        if (value !== null) carried.push(`${key}=${value}`);
+      }
+      // A clearing link carries its key with an empty value, which is still an instruction: 'class='
+      // means any stage. `carried` therefore holds it, and a link with nothing to say falls through to
+      // the plain screen anchor below.
+      if (carried.length > 0) {
+        return `href="#feed" data-feed="${escape(carried.join('&'))}"`;
+      }
+    }
+
     const screen = SCREENS.find((s) => s.path === `/${pathname}`);
     return screen ? `href="#${screen.key}"` : `href="#${escape(pathname)}"`;
   });
@@ -420,6 +448,11 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
     if (!section) return;
 
     var bodies = Array.prototype.slice.call(section.querySelectorAll('tbody'));
+    // A screen with no table is not filtered by this block. The feed is rows of articles and has its
+    // own handler below; without this guard it also got a note here reading '0 exported rows', which
+    // is true of the tables it has none of and reads as an empty screen.
+    if (!bodies.length) return;
+
     var count = document.createElement('div');
     count.className = 'filter-count';
     form.parentNode.insertBefore(count, form.nextSibling);
@@ -456,6 +489,110 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
         apply();
       });
     });
+
+  // The feed's own controls: six view tabs, four stage filters, four positions, four sort orders.
+  //
+  // On the server each is a link to a query string and the answer comes back from SQL. There is no
+  // server here, so each carries its parameters as data-feed and they are applied to the rows already
+  // in the document. Before this they all resolved to the anchor the reader was already on, so every
+  // control silently did nothing — which reads as a broken application rather than as a snapshot.
+  //
+  // The tab counts are left exactly as the server computed them. They describe the whole corpus, while
+  // this page holds one page of rows, and overwriting them with a count of what is present would make
+  // the snapshot look like the system.
+  (function () {
+    var section = document.querySelector('[data-screen="feed"]');
+    if (!section) return;
+
+    var rows = Array.prototype.slice.call(section.querySelectorAll('article.item'));
+    if (!rows.length) return;
+
+    var list = rows[0].parentNode;
+    var state = { view: 'everything', cls: '', position: '', sort: 'newest', q: '' };
+
+    var note = document.createElement('div');
+    note.className = 'filter-count';
+    list.parentNode.insertBefore(note, list);
+
+    function matches(row) {
+      var views = (row.getAttribute('data-views') || '').split(' ');
+      var has = function (flag) { return views.indexOf(flag) !== -1; };
+
+      // Same rules as FEED_FILTER in src/web/queries.ts: new and patch both exclude what the reader
+      // dismissed, because dismissing is the one instruction the feed was given.
+      if (state.view === 'new' && !(has('new') && !has('dismissed'))) return false;
+      if (state.view === 'patch' && !(has('patch') && !has('dismissed'))) return false;
+      if (state.view === 'tracked' && !has('tracked')) return false;
+      if (state.view === 'sent' && !has('sent')) return false;
+      if (state.view === 'dismissed' && !has('dismissed')) return false;
+
+      if (state.cls && row.getAttribute('data-class') !== state.cls) return false;
+      if (state.position && row.getAttribute('data-position') !== state.position) return false;
+      if (state.q && row.textContent.toLowerCase().indexOf(state.q) === -1) return false;
+      return true;
+    }
+
+    function apply() {
+      var shown = 0;
+      rows.forEach(function (row) {
+        var ok = matches(row);
+        row.hidden = !ok;
+        if (ok) shown += 1;
+      });
+
+      // Sort by reattaching in order. Blank keys sort last in every order, which is what the server
+      // does with nulls: an absent value is not a low one.
+      var key = state.sort === 'due' ? 'data-due'
+        : state.sort === 'fit' ? 'data-fit'
+        : state.sort === 'value' ? 'data-value'
+        : 'data-newest';
+      var ascending = state.sort === 'due';
+      rows.slice().sort(function (a, b) {
+        var x = a.getAttribute(key), y = b.getAttribute(key);
+        if (!x && !y) return 0;
+        if (!x) return 1;
+        if (!y) return -1;
+        var d = Number(x) - Number(y);
+        return ascending ? d : -d;
+      }).forEach(function (row) { list.appendChild(row); });
+
+      note.textContent = shown + ' of ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') +
+        ' in this snapshot match. The tab counts come from the server, over the whole corpus.';
+    }
+
+    // Mark the chosen chip in each group, since the served interface marks it with a class the
+    // rewritten link no longer carries.
+    function mark(link) {
+      var group = link.parentNode;
+      Array.prototype.forEach.call(group.querySelectorAll('a[data-feed]'), function (other) {
+        other.classList.remove('on');
+      });
+      link.classList.add('on');
+    }
+
+    Array.prototype.forEach.call(section.querySelectorAll('a[data-feed]'), function (link) {
+      link.addEventListener('click', function (event) {
+        event.preventDefault();
+        var params = new URLSearchParams(link.getAttribute('data-feed') || '');
+        if (params.has('view')) state.view = params.get('view') || 'everything';
+        if (params.has('class')) state.cls = params.get('class') || '';
+        if (params.has('position')) state.position = params.get('position') || '';
+        if (params.has('sort')) state.sort = params.get('sort') || 'newest';
+        mark(link);
+        apply();
+      });
+    });
+
+    var search = section.querySelector('form.search input[type=search]');
+    if (search) {
+      search.addEventListener('input', function () {
+        state.q = search.value.trim().toLowerCase();
+        apply();
+      });
+    }
+
+    apply();
+  })();
     apply();
   });
 })();
@@ -463,6 +600,24 @@ ${bodies.map((b) => `<section data-screen="${b.key}">${b.html}</section>`).join(
 `;
 
   await mkdir(path.dirname(out), { recursive: true });
+  // Parse every inline script before writing.
+  //
+  // This exists because a stray apostrophe inside a single-quoted string shipped once: the typecheck
+  // passed, the tests passed, the file was 581 KB of valid-looking HTML, and the whole behaviour block
+  // failed to parse in the browser, so every control on the feed silently did nothing. The output is a
+  // string as far as TypeScript is concerned, so nothing upstream can catch that — the only place it can
+  // be caught is here, and a syntax error must fail the build rather than produce a page that looks fine.
+  for (const [index, block] of [...document.matchAll(/<script>([\s\S]*?)<\/script>/g)].entries()) {
+    try {
+      new Function(block[1]!);
+    } catch (error) {
+      throw new Error(
+        `Inline script ${index + 1} does not parse: ${error instanceof Error ? error.message : String(error)}. ` +
+          'The snapshot was not written. A quote inside a quoted string is the usual cause.',
+      );
+    }
+  }
+
   await writeFile(out, document, 'utf8');
 
   const kb = Math.round(Buffer.byteLength(document) / 1024);

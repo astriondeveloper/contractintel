@@ -111,7 +111,40 @@ function row(item: FeedRow, ctx: Ctx, returnTo: string): Html {
         <span class="sub">sign in to track</span>
       </div>`;
 
-  return html`<article class="item${item.is_new ? ' fresh' : ''}">
+  // The row's own state, on the element.
+  //
+  // The server does not read these: it filters in SQL, which is where filtering belongs when there is
+  // a database and more rows than fit on a page. They exist for the static snapshot
+  // (`scripts/build-demo.ts`), which has every row it renders already in the document and no server to
+  // ask. Without them the snapshot's view tabs and filter chips are links to a query string that
+  // nothing parses, so they all resolve to the same anchor and clicking one appears to do nothing.
+  //
+  // Kept in the real markup rather than injected by the demo builder, because a second copy of the
+  // row's shape maintained in the build script would drift from this one silently.
+  const flags = [
+    item.is_new ? 'new' : '',
+    item.follow_count > 0 ? 'patch' : '',
+    item.tracked ? 'tracked' : '',
+    item.dismissed ? 'dismissed' : '',
+    item.sent ? 'sent' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const sortKey = (value: string | number | Date | null): string => {
+    if (value === null) return '';
+    if (value instanceof Date) return String(value.getTime());
+    return String(value);
+  };
+
+  return html`<article class="item${item.is_new ? ' fresh' : ''}"
+    data-views="${flags}"
+    data-class="${item.signal_class}"
+    data-position="${item.astrion_position ?? 'none'}"
+    data-newest="${sortKey(item.first_seen_at)}"
+    data-due="${sortKey(item.key_date)}"
+    data-fit="${sortKey(item.strategic_fit)}"
+    data-value="${sortKey(item.estimated_value)}">
     <div class="item-main">
       <div class="top">
         ${item.is_new ? chip('sky', 'New') : ''}
@@ -178,8 +211,14 @@ export async function feedScreen(ctx: Ctx): Promise<string> {
   const link = (param: string, value: string, label: string, current: string) => {
     const url = new URL(ctx.url);
     url.searchParams.delete('page');
-    if (value) url.searchParams.set(param, value);
-    else url.searchParams.delete(param);
+    // The clearing link keeps the parameter with an empty value rather than dropping it.
+    //
+    // Identical to the server, which reads an absent parameter and an empty one the same way. It
+    // matters to the static snapshot: with the parameter dropped, the "Any" chip is a link to bare
+    // /feed, indistinguishable from the rail's own Feed link, so the snapshot had no way to tell
+    // "clear this filter" from "go to the feed" and the chip did nothing. `class=` says which filter
+    // is being cleared.
+    url.searchParams.set(param, value);
     return html`<a class="button quiet${current === value ? ' on' : ''}"
       href="${url.pathname}${url.search}"
       >${label}</a
