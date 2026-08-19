@@ -40,7 +40,7 @@ projects what is coming, and the interface is a personal feed over all of it.
 | Loaded | 22,624 contract actions, 4,042 subcontract edges, 854 customers, 74 programs, 213 DACIS contracts |
 | Entity resolution | 100 percent of the FPDS corpus resolved; review queue empty |
 | Interface | Nineteen screens, server rendered, no client bundle, three write endpoints |
-| Tests | 537, against a real PostgreSQL 16 |
+| Tests | 557, against a real PostgreSQL 16 |
 | Market sizing | TAM, SAM and SOM per campaign, with an observed capture rate and its sample size |
 | Acceptance tests | **12 of 12 pass**, 0 fail, 0 blocked |
 
