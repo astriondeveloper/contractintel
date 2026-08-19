@@ -1031,11 +1031,74 @@ a field the build does not read is a field silently not reaching the feed.
 
 ---
 
+## D32. GovWin is a separate table, its dates keep their precision, and its prose stays at Deltek
+
+GovWin is the first source here that describes a requirement *before* anything about it has been
+published. FPDS describes awards. SAM.gov describes notices the government has already posted. A GovWin
+record describes a requirement an analyst is tracking: of the first export's 2,629 rows, 421 were
+Forecast Pre-RFP and 348 Pre-RFP, which together are 769 requirements with no solicitation to find.
+
+**Decision: its own table, not a variant of `pursuit`.**
+
+Forcing it into the notice model would lose three things that are the reason to have it. Its lifecycle
+is GovWin's, not SAM.gov's — Forecast Pre-RFP through Source Selection to Protest — and those states
+carry information no notice type does. Its dates carry a *basis*: somebody's estimate, marked as such.
+And its status disagrees with SAM.gov's on purpose: for HQ085925RE001 the tracked opportunity said
+Awarded while GovWin's own SAM-notice row said Source Selection, because the two are maintained on
+different cadences. `govwin_pursuit_link` is a view over the shared solicitation number rather than a
+merge, because merging would mean picking a winner per field and the disagreement is often the earliest
+sign something has moved.
+
+**Decision: a month-precision date is stored as a month.**
+
+In the first export the estimate flag and the date precision correspond exactly: all 624 `Actual`
+solicitation dates are `mm/dd/yyyy`, and all 673 Deltek and 37 government estimates are `mm/yyyy`.
+Nobody claims to know the day an unpublished solicitation will drop. So the date is stored on the first
+of its month with `solicitation_date_precision = 'month'` beside it, and the anchor is a storage
+convention rather than a claim. Without the precision column, "sometime in June 2027" silently becomes
+"the 1st of June 2027" and every downstream comparison treats a guess as a fact — the same failure D19
+was written to prevent on this system's own projections. `govwin_forecast_check` therefore compares by
+quarter, because an estimate named to the month cannot be checked to the day.
+
+**Decision: the written analysis is not stored.**
+
+`Summary` is on every row and `Latest News` on 1,553 of them, and they are the largest fields in the
+export. They are also Deltek's licensed prose. This system renders every screen into a self-contained
+snapshot that embeds every row it shows, and that snapshot has already been published to a shareable
+URL more than once this week — so holding the analysis in the database would put licensed content one
+careless publish away from being redistributed. `govwin_url` links back to the record instead, where the
+reader's own licence applies. Same pattern as the SAM.gov link on the hand-off panel: point at the
+source rather than re-host it.
+
+That reasoning applies to the export file too. It must never be committed, for the same reason the DACIS
+extracts must not: licensed third-party content, public repository.
+
+**What the first load actually showed, including what does not work.**
+
+The value column is thousands, which the loader multiplies: OASIS+ reads $172.4bn rather than $172m, and
+reading it as dollars would have made every figure in the system a thousand times too small without
+anything failing.
+
+Agency resolution is the weak part. GovWin names agencies in a four-level hierarchy and does not code
+them, so the loader resolves the most specific name against the labels the corpus has observed. On the
+development corpus that resolved **0 of 2,629**, because that corpus holds two invented agency labels.
+The real rate is unmeasured, and there is reason for caution beyond corpus depth: GovWin writes
+"DEFENSE" where FPDS writes "DEPT OF DEFENSE", so exact-match may resolve poorly even against a full
+corpus. Until it is measured, an agency follow will not reliably match a GovWin row. The count is
+reported on every run rather than hidden.
+
+The forecast comparison returned **zero rows** on the first load, and that number is honest rather than
+broken: the join is on the predecessor contract, and the development corpus held six projections none of
+whose contracts GovWin names. `tests/govwin.test.ts` constructs the match instead of hoping for it,
+because an empty view and a broken view look identical.
+
+---
+
 ---
 
 ## Open questions
 
-**Gate B — is the GovWin API available?** Owner: Gavin.
+**Gate B — is the GovWin *API* available?** Owner: Gavin. Half answered: the export is available and is loaded weekly by `npm run load:govwin` (D32). The API is still unknown, and it is what would turn a weekly file into a daily sync.
 
 **Gate C — does the Salesforce Opportunity hold a government key?** Owner: BD Ops.
 

@@ -17,3 +17,15 @@ data/seed/*
 data/drops/*
 !data/drops/.gitkeep
 .DS_Store
+
+# Licensed third-party exports, ignored by extension as well as by folder.
+#
+# GovWin and DACIS exports are licensed content and this is a public repository. Ignoring the folders
+# is not enough on its own: an export saved to the repository root, or to a folder nobody thought of,
+# would otherwise be committable. Ignoring the extension catches it wherever it lands, and there are no
+# spreadsheets in this repository for the rule to get in the way of.
+*.xlsx
+*.xls
+*.xlsm
+data/govwin/*
+!data/govwin/.gitkeep

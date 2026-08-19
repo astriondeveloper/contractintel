@@ -336,6 +336,7 @@ right rather than the thing to avoid, so here is who owns what and why nothing i
 | Notices, first fill | **GovCon API search** — `--backfill` | Takes a date range and the plan's full history window | — |
 | Award **history** | **the corpus** — `npm run load:fpds` | Fifteen years of transactions, which is what a recompete rhythm is learned from | — |
 | Award **recency** | **GovCon API** — `npm run load:contracts` | Refreshed daily, so last week's award is here without waiting for an extract | — |
+| Requirements **before they publish** | **GovWin export** — `npm run load:govwin` | The only source that tracks a requirement with no solicitation yet. 769 of the first 2,629 rows | — |
 | One company's full history | **GovCon API** — `load:contracts --uei` | `companies/{uei}/awards` is not window-gated. Pro tier. | — |
 | Entity, UEI, CAGE | **GovCon API**, on demand | Nothing else here has it | — |
 | Exclusions | **GovCon API**, on demand | A live fact about today; a stale answer is the dangerous one | — |
@@ -377,6 +378,54 @@ The exception is `--uei`, which uses `companies/{uei}/awards`. That endpoint is 
 window and returns a company's full history — real depth, but per company rather than per office.
 Enough to complete Astrion's own incumbency and a named competitor set; not enough to learn how a
 contracting office behaves.
+
+### GovWin: the only source that sees a requirement before it exists
+
+```bash
+npm run load:govwin -- --file <export.xlsx> --headers   # columns only, check the mapping
+npm run load:govwin -- --file <export.xlsx> --dry-run
+npm run load:govwin -- --file <export.xlsx>             # weekly
+```
+
+Every other source here describes something that already happened: FPDS an award, SAM.gov a published
+notice. GovWin describes a requirement an analyst is tracking, often years early. The first export held
+2,629 rows, of which **769 were Pre-RFP or Forecast Pre-RFP** — requirements with no solicitation to
+find yet, which is the earliest warning this system has ever had access to.
+
+It gets its own table rather than becoming notices, because its lifecycle, its estimate provenance and
+its disagreements with SAM.gov are the reason to have it. `govwin_pursuit_link` joins it to requirements
+by solicitation number as a view rather than a merge: for one solicitation GovWin's tracked record said
+*Awarded* while its own SAM-notice row said *Source Selection*, and that disagreement is often the
+earliest sign something has moved.
+
+**An estimate is a month, and stays a month.** In the export the estimate flag and the date precision
+correspond exactly — every `Actual` date is a day, every Deltek or government estimate is a month —
+because nobody knows the day an unpublished solicitation will drop. A month-precision date is stored on
+the first of that month with its precision beside it, and comparisons are made by quarter.
+
+**The value column is thousands.** `172400000` is $172.4bn, the OASIS+ ceiling. The loader multiplies on
+the way in; read as dollars every figure would be a thousand times too small and nothing would fail.
+
+**The prose is deliberately not stored.** `Summary` and `Latest News` are Deltek's licensed analysis, and
+this repository publishes a self-contained snapshot that embeds every row it renders. Holding them would
+put licensed content one careless publish away from a public URL, so the row links back to GovWin
+instead. The export itself must never be committed.
+
+#### The forecast finally has an outside check
+
+`forecast_item` projects when a requirement will solicit, from a contract end date minus a lead time it
+learns per office and assumes at 365 days when it cannot. GovWin publishes an independent estimate of the
+same event. `govwin_forecast_check` puts them side by side, joined on the predecessor contract — the only
+identifier the two can share, since a projection describes something unpublished and so has no
+solicitation number.
+
+`govwin_forecast_gap` counts what each sees that the other does not. Both directions matter: a GovWin
+Forecast Pre-RFP with no projection is a requirement this system is blind to, and a projection GovWin is
+not tracking is worth a second look.
+
+On the development corpus this returns **zero comparisons**, because the join needs the predecessor
+contract in the corpus and that corpus holds six projections. That is the honest state of a thin corpus
+rather than a broken view; the tests construct a match to prove the join works.
 
 ### Contract actions
 
